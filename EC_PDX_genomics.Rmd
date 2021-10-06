@@ -1614,82 +1614,82 @@ for (i in filenames){
           strip.text.y = element_text(size = 7)))
   
   # ClonEvol not working on the cluster. Ran on local computer (seems to be the same version and everything)
- #  x <- loci_input %>%
- #    mutate(sample_id = str_replace(sample_id, "_", ":")) %>%
- #    separate(sample_id, c("PDX","sample"), sep = ":") %>%
- #    select(mutation_id,sample, cluster_id, cellular_prevalence) %>%
- #    mutate(sample = if_else(grepl("T",sample), "T",sample)) %>%
- #    arrange(cluster_id) %>%
- #    right_join(top_5_clusters) %>%
- #    mutate(cellular_prevalence = cellular_prevalence *100)
- #  
- # # shorten vaf column names as they will be
- #  sample.names <- unique(x$sample)
- #  vaf.col.names <- sample.names
- #  
- #  # Spread the data by sample
- #  x <- x %>%  spread(key = sample, value = cellular_prevalence)
- #  
- #  
- #  clone.colors <- c("#89c5b3", "#EABE94", "#0B775E", "#445e9a", "#f56047") #Rushmore1 edited
- # 
- #  # Infering clonal evolution trees
- #  y = infer.clonal.models(variants = x,
- #                          vaf.col.names = vaf.col.names,
- #                          cancer.initiation.model='monoclonal',
- #                          subclonal.test = 'bootstrap',
- #                          subclonal.test.model = 'non-parametric',
- #                          num.boots = 1000,
- #                          founding.cluster = 1,
- #                          cluster.center = 'mean',
- #                          ignore.clusters = NULL,
- #                          random.seed = 1,
- #                          clone.colors = clone.colors,
- #                          min.cluster.vaf = 0.01,
- #                          # min probability that CCF(clone) is non-negative
- #                          sum.p = 0.05,
- #                          # alpha level in confidence interval estimate for CCF(clone)
- #                          alpha = 0.05)
- #  
- #  y <- convert.consensus.tree.clone.to.branch(y, branch.scale = 'sqrt')
- #  
- #  plot.clonal.models(y,
- #                     # box plot parameters
- #                     box.plot = FALSE,
- #                     # bell plot parameters
- #                     clone.shape = 'bell',
- #                     bell.event = FALSE,
- #                     clone.time.step.scale = 1,
- #                     bell.curve.step = 2,
- #                     # node-based consensus tree parameters
- #                     merged.tree.plot = FALSE,
- #                     merged.tree.clone.as.branch = TRUE,
- #                     mtcab.event.sep.char = ',',
- #                     mtcab.branch.text.size = 0.5,
- #                     mtcab.branch.width = 2.5,
- #                     mtcab.node.size = 6,
- #                     mtcab.node.label.size = 1,
- #                     mtcab.node.text.size = 0.5,
- #                     # cellular population parameters
- #                     cell.plot = TRUE,
- #                     num.cells = 100,
- #                     cell.border.size = 0.2,
- #                     cell.border.color = 'black',
- #                     clone.grouping = 'horizontal',
- #                     #meta-parameters
- #                     scale.monoclonal.cell.frac = TRUE,
- #                     show.score = FALSE,
- #                     cell.frac.ci = FALSE,
- #                     disable.cell.frac = FALSE,
- #                     # output figure parameters
- #                     out.dir = 'figures',
- #                     out.format = 'pdf',
- #                     out.prefix = model,
- #                     overwrite.output = TRUE,
- #                     width = 5,
- #                     height = 4,
- #                     # vector of width scales for each panel from left to right
- #                     panel.widths = c(5,2.2,3))
+  x <- loci_input %>%
+    mutate(sample_id = str_replace(sample_id, "_", ":")) %>%
+    separate(sample_id, c("PDX","sample"), sep = ":") %>%
+    select(mutation_id,sample, cluster_id, cellular_prevalence) %>%
+    mutate(sample = if_else(grepl("T",sample), "T",sample)) %>%
+    arrange(cluster_id) %>%
+    right_join(top_5_clusters) %>%
+    mutate(cellular_prevalence = cellular_prevalence *100)
+
+ # shorten vaf column names as they will be
+  sample.names <- unique(x$sample)
+  vaf.col.names <- sample.names
+
+  # Spread the data by sample
+  x <- x %>%  spread(key = sample, value = cellular_prevalence)
+
+
+  clone.colors <- c("#89c5b3", "#EABE94", "#0B775E", "#445e9a", "#f56047") #Rushmore1 edited
+
+  # Infering clonal evolution trees
+  y = infer.clonal.models(variants = x,
+                          vaf.col.names = vaf.col.names,
+                          cancer.initiation.model='monoclonal',
+                          subclonal.test = 'bootstrap',
+                          subclonal.test.model = 'non-parametric',
+                          num.boots = 1000,
+                          founding.cluster = 1,
+                          cluster.center = 'mean',
+                          ignore.clusters = NULL,
+                          random.seed = 1,
+                          clone.colors = clone.colors,
+                          min.cluster.vaf = 0.01,
+                          # min probability that CCF(clone) is non-negative
+                          sum.p = 0.05,
+                          # alpha level in confidence interval estimate for CCF(clone)
+                          alpha = 0.05)
+
+  y <- convert.consensus.tree.clone.to.branch(y, branch.scale = 'sqrt')
+
+  plot.clonal.models(y,
+                     # box plot parameters
+                     box.plot = FALSE,
+                     # bell plot parameters
+                     clone.shape = 'bell',
+                     bell.event = FALSE,
+                     clone.time.step.scale = 1,
+                     bell.curve.step = 2,
+                     # node-based consensus tree parameters
+                     merged.tree.plot = FALSE,
+                     merged.tree.clone.as.branch = TRUE,
+                     mtcab.event.sep.char = ',',
+                     mtcab.branch.text.size = 0.5,
+                     mtcab.branch.width = 2.5,
+                     mtcab.node.size = 6,
+                     mtcab.node.label.size = 1,
+                     mtcab.node.text.size = 0.5,
+                     # cellular population parameters
+                     cell.plot = TRUE,
+                     num.cells = 100,
+                     cell.border.size = 0.2,
+                     cell.border.color = 'black',
+                     clone.grouping = 'horizontal',
+                     #meta-parameters
+                     scale.monoclonal.cell.frac = TRUE,
+                     show.score = FALSE,
+                     cell.frac.ci = FALSE,
+                     disable.cell.frac = FALSE,
+                     # output figure parameters
+                     out.dir = 'figures',
+                     out.format = 'pdf',
+                     out.prefix = model,
+                     overwrite.output = TRUE,
+                     width = 5,
+                     height = 4,
+                     # vector of width scales for each panel from left to right
+                     panel.widths = c(5,2.2,3))
 }
 
 ```

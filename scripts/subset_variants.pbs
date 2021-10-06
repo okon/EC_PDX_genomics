@@ -1,0 +1,22 @@
+#PBS -N subset_variants
+#PBS -l walltime=100:00:00,ncpus=1,mem=10gb
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=0007
+#PBS -M olga.kondrashova@qimrberghofer.edu.au
+##PBS -m ae
+
+module load picard/2.19.0
+module load gatk/3.7
+
+OUTDIR="/working/lab_nicw/olgaK/Pollock_endometrial_PDX_manuscript/data/processed/VCFs"
+RESOURCES="/working/lab_nicw/olgaK/Pollock_endometrial_PDX_manuscript/data/supporting"
+
+FILEBASE=`basename $input .vcf.gz`
+
+gatk -T SelectVariants \
+-R ${RESOURCES}/GRCh37_ICGC_standard_v2.fa \
+-V ${input} \
+-o ${OUTDIR}/${FILEBASE}.BROCA.vcf.gz \
+-L ${RESOURCES}/BROCA_v6_short_genes.interval_list
+

@@ -1,0 +1,30 @@
+#!/bin/bash
+#######################
+#PBS -N indels_to_mhom
+#PBS -l ncpus=1,mem=2gb,walltime=01:00:00
+#PBS -j oe
+#PBS -M olga.kondrashova@qimrberghofer.edu.au
+#PBS -m ae
+#PBS -W umask=0007
+#######################
+
+
+module load R/3.5.1
+
+INPUT_DIR="/working/genomeinfo/share/analysis/PCAWG_-_UCEC/VCFs"
+PROJECT_DIR="/working/lab_nicw/olgaK/Pollock_endometrial_PDX_manuscript/"
+DIR="/working/lab_nicw/olgaK/Pollock_endometrial_PDX_manuscript/data/processed/hrdetect/pcawg_ucec"
+SCRIPT_DIR="/working/lab_nicw/olgaK/scripts/hrdetect-pipeline-master/scripts/microhomology"
+
+
+for f in ${INPUT_DIR}/*.shc.indelVcf.vcf ;
+do
+	SAMPLE=`basename $f .shc.indelVcf.vcf`
+	Rscript ${SCRIPT_DIR}/flank_indels.R \
+		-v $f \
+		-o ${DIR}/indels/${SAMPLE}.annotated_indels.tsv
+	Rscript ${SCRIPT_DIR}/compute_microhomology_scores.R \
+		-i ${DIR}/indels/${SAMPLE}.annotated_indels.tsv \
+		-o ${DIR}/microhom/${SAMPLE}.microhomology_results.tsv
+done
+

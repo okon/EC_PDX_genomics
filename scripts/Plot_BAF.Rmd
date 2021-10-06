@@ -1,0 +1,358 @@
+---
+title: "Plot_BAF"
+author: "Olga Kondrashova"
+date: "October 7, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This script is used to produce BAF plots from SNP array data. Since raw SNP array data cannot be shared without ethics permission, access to this data is managed through EGA - details listed in the Bonazzi, Kondrashova et al. paper.  
+  
+SNP array data needs to be analysed with GAP and segment files supplied in "../data/raw/arrays/*_segments.txt". Also raw SNP array files "\*_FinalReport\*.txt" currently listed in array_meta$Tumor_Report column need to be provided - paths to be changed.  
+  
+```{r functions}
+BAF_LRR_plot <- function(seg_list=NULL, meta=NULL, model_inc, chr_inc, sample_inc, type="BAF"){
+  if (type %in% c("BAF","LRR")){
+    raw <- meta %>%
+      filter(Model == model_inc) %>%
+      filter(SampleLabelSimple %in% sample_inc) %>%
+      select(SampleLabelSimple, Tumor_Report) %>%
+      deframe() %>% # convert to named vector
+      map_dfr(~fread(., skip = "SNP Name"),.id = "name") %>%
+      filter(as.integer(Chr) %in% chr_inc) %>%
+      select(Chr,Position,`B Allele Freq`,`Log R Ratio`,`SNP Name`, name) %>%
+      filter(!is.na(`B Allele Freq`)) %>%
+      # gather(key = "Variable",value = "Value", - Chr, - Position, - name) %>%
+      mutate(Position_mb = Position/1000000) %>%
+      mutate(Chr = factor(as.integer(Chr), levels = chr_inc))
+    if (type == "BAF"){
+      p<- raw %>%
+        # filter(Variable == "B Allele Freq") %>%
+        sample_n(500000) %>%
+        mutate(name = factor(name, levels = unique(sample_inc))) %>%
+        ggplot(aes(x = Position_mb, y = `B Allele Freq`)) +
+        geom_point(size = 0.3, alpha = 0.3, shape = 16) +
+        facet_grid(name~Chr, scales = "free", space = "free") +
+        labs(x="Position (Mb)") + 
+        scale_y_continuous(breaks = seq(0,1,by=0.5)) +
+        theme(strip.text.y = element_text(angle = 0),
+              axis.text = element_text(size=7))
+    }
+  } 
+  if(type %in% c("LRR","cytobands")){
+    seg <- seg_list %>%
+      purrr::set_names(. %>% basename(.) %>% str_remove("_segments.txt")) %>%
+      map_dfr(~read_tsv(., comment = "#"), .id = "name") %>%
+      dplyr::rename(Tumor_Sample = name) %>%
+      filter(as.integer(Chr) %in% chr_inc) %>%
+      mutate(Chr = factor(as.integer(Chr), levels = chr_inc)) %>%
+      left_join(array_meta) %>%
+      filter(SampleLabelSimple %in% sample_inc) %>%
+      mutate(name = factor(SampleLabelSimple, levels = unique(sample_inc)))   %>%
+      mutate(Position_mb = PosSNPstart/1000000,
+             Position_end_mb =  PosSNPend/1000000) %>%
+      filter(Position_end_mb-Position_mb > 1) %>%
+      mutate(Copy_change = if_else(Copy == 2, "no","yes")) 
+    
+    if(type == "LRR"){
+      p <- raw %>%
+        #filter(Variable == "Log R Ratio") %>%
+        group_by(name) %>%
+        sample_n(10000*length(sample_inc)) %>%
+        ungroup() %>%
+        mutate(name = factor(name, levels = unique(sample_inc))) %>%
+        bind_rows(seg %>% select(Position_mb, Position_end_mb, 
+                                 Copy_change, LRR, name, Chr)) %>%
+        ggplot() +
+        geom_point(aes(x = Position_mb, y = `Log R Ratio`), 
+                   size = 0.3, alpha = 0.3, shape = 1, na.rm = TRUE) +
+        geom_segment(aes(x = Position_mb, xend = Position_end_mb,
+                         y = LRR, yend=LRR, colour = Copy_change),
+                     na.rm = TRUE) +
+        scale_colour_manual(values = c("no" = "grey", "yes" = "red")) + 
+        facet_grid(name~Chr, scales = "free_x", space = "free_x") +
+        ylim(-0.7,1) +
+        labs(x="Position (Mb)") + 
+        theme(strip.text.y = element_text(angle = 0),
+              legend.position = "none",
+              axis.text = element_text(size=7))
+    }else if(type == "cytobands"){
+      seg %>%
+        filter(Copy_change == "yes") %>%
+        distinct() %>%
+        rowwise() %>%
+        mutate(cytoband_start = position2Cytoband(chrom = Chr, 
+                                                  position = Position_mb*10^6,
+                                                  units = "hg19",
+                                                  bands = "major"),
+               cytoband_end = position2Cytoband(chrom = Chr, 
+                                                position = Position_end_mb*10^6,
+                                                units = "hg19",
+                                                bands = "major"))  %>%
+        select(cytoband_start, cytoband_end, name) %>%
+      write_tsv(paste0("../tables/",model_inc,"_cytobands.tsv"))
+    }
+  }
+  
+  if (type %in% c("BAF","LRR")){
+    if(chr_inc == c(1:22)){
+      p + theme(axis.text.x = element_blank(),
+                axis.ticks.x = element_blank(),
+                axis.title.x = element_blank())
+    } else{
+      p
+    }
+  }
+}
+
+
+```
+
+
+
+### CNV plots comparing differences in multiple samples per PDX
+
+```{r read_array_meta}
+
+# Function found on stackoverflow by GGAnderson
+extractorRData <- function(file, object) {
+      #' Function for extracting an object from a .RData file created by R's save() command
+      #' Inputs: RData file, object name
+      E <- new.env()
+      load(file=file, envir=E)
+      return(get(object, envir=E, inherits=F))
+    }
+
+
+array_meta <- extractorRData("../data/EC_PDX_figure_data.RData","array_meta")
+
+
+array_metadata_subset <- array_meta %>%
+ select(Model, SampleLabel,SeqSampleLabel,Tumor_Sample, V6,V10) %>%
+ gather(key = "Column", value = "ReportFile", - Model, -SampleLabel,-SeqSampleLabel, -Tumor_Sample) %>%
+ select(-Column) %>%
+ distinct() %>%
+ right_join(read_tsv("../data/supporting/PDX_specific_CNV_metadata.txt"))
+
+```
+
+
+```{r BAF_LRR_plot_PDX12, cache.lazy=FALSE, message=FALSE, dpi=600}
+
+PDX12_chr <- c(1,4,8)
+
+PDX12_sample_order <- c("Pt", "F1 (A)","F2 (A)", "F4 (A)",
+                        "F1 (C)","F2 (C)",
+                          "F2 (B)" , "F4 (B)")
+
+
+PDX12_seg_list <- list.files(path="../data/raw/arrays/",
+                       pattern = "^12.*_segments.txt$",
+                       recursive = F, 
+                       full.names = T) 
+
+
+
+BAF_LRR_plot(meta = array_meta, 
+             model_inc = "PD012", chr_inc = PDX12_chr,
+             sample_inc = PDX12_sample_order,
+             type = "BAF")
+
+
+
+BAF_LRR_plot(meta = array_meta, 
+             seg_list = PDX12_seg_list,
+             model_inc = "PD012", chr_inc = PDX12_chr,
+             sample_inc = PDX12_sample_order,
+             type = "LRR")
+
+BAF_LRR_plot(seg_list = PDX12_seg_list,
+             model_inc = "PD012", chr_inc = PDX12_chr,
+             sample_inc = PDX12_sample_order,
+             type = "cytobands")
+
+
+```
+
+```{r BAF_LRR_plot_PDX58, cache.lazy=FALSE, message=FALSE, dpi=600}
+dput(array_meta %>% filter(Model == "PD058") %>% pull(SampleLabelSimple) %>% unique())
+
+PDX58_chr <- c(6,8,10,18)
+PDX58_sample_order <- c( "Pt","F0 (A)", "F1 (A)", "F0 (B)", "F1 (B)", "F2 (B)")
+
+
+PDX58_seg_list <- list.files(path="../data/raw/arrays/",
+                       pattern = "^58.*_segments.txt$",
+                       recursive = F, 
+                       full.names = T) 
+
+
+BAF_LRR_plot(meta = array_meta,
+             model_inc = "PD058", chr_inc = PDX58_chr,
+             sample_inc = PDX58_sample_order,
+             type = "BAF")
+
+
+
+BAF_LRR_plot(meta = array_meta,
+             seg_list = PDX58_seg_list,
+             model_inc = "PD058", chr_inc = PDX58_chr,
+             sample_inc = PDX58_sample_order,
+             type = "LRR")
+
+BAF_LRR_plot(seg_list = PDX58_seg_list,
+             model_inc = "PD058", chr_inc = PDX58_chr,
+             sample_inc = PDX58_sample_order,
+             type = "cytobands")
+```
+
+
+```{r BAF_LRR_plot_PDX49, cache.lazy=FALSE, fig.width=10, message=FALSE, dpi=600}
+dput(array_meta %>% filter(Model == "PD049") %>% pull(SampleLabelSimple) %>% unique())
+
+
+PDX49_sample_order <- c("Pt","F0 (A)", "F1 (A) 1", "F1 (A) 2")
+
+
+PDX49_seg_list <- list.files(path="../data/raw/arrays/",
+                       pattern = "^49.*_segments.txt$",
+                       recursive = F, 
+                       full.names = T) 
+
+
+BAF_LRR_plot( meta = array_meta,
+             model_inc = "PD049", chr_inc = c(1:22),
+             sample_inc = PDX49_sample_order,
+             type = "BAF")
+
+
+
+BAF_LRR_plot( meta = array_meta,
+             seg_list = PDX49_seg_list,
+             model_inc = "PD049", chr_inc = c(1:22),
+             sample_inc = PDX49_sample_order,
+             type = "LRR")
+
+BAF_LRR_plot(seg_list = PDX49_seg_list,
+             model_inc = "PD049", chr_inc = c(1:22),
+             sample_inc = PDX49_sample_order,
+             type = "cytobands")
+
+```
+
+```{r BAF_LRR_plot_PDX56, cache.lazy=FALSE, fig.width=10, message=FALSE, dpi=600}
+dput(array_meta %>% filter(Model == "PD056") %>% pull(SampleLabelSimple) %>% unique())
+
+
+PDX56_sample_order <- c("Pt","F0 (A)", "F1 (A) 1","F1 (A) 2", "F2 (A) 1", "F2 (A) 2", "F2 (A) 3", "F3 (A) 1", "F3 (A) 2", "F1 (B)", "F2 (B)")
+
+
+
+PDX56_seg_list <- list.files(path="../data/raw/arrays/",
+                       pattern = "^56.*_segments.txt$",
+                       recursive = F, 
+                       full.names = T) 
+
+
+BAF_LRR_plot(meta = array_meta,
+             model_inc = "PD056", chr_inc = c(1:22),
+             sample_inc = PDX56_sample_order,
+             type = "BAF")
+
+
+
+BAF_LRR_plot(meta = array_meta,
+             seg_list = PDX56_seg_list,
+             model_inc = "PD056", chr_inc = c(1:22),
+             sample_inc = PDX56_sample_order,
+             type = "LRR")
+
+BAF_LRR_plot(seg_list = PDX56_seg_list,
+             model_inc = "PD056", chr_inc = c(1:22),
+             sample_inc = PDX56_sample_order,
+             type = "cytobands")
+```
+
+
+```{r BAF_LRR_plot_PDX23, cache.lazy=FALSE, fig.width=10, message=FALSE, dpi=600}
+dput(array_meta %>% filter(Model == "PD023") %>% pull(SampleLabelSimple) %>% unique())
+
+
+PDX23_sample_order <- c("F0 (B)", "F1 (B)", "F2 (B)", "F3 (B)",
+                        "F0 (C)", "F1 (C)", "F2 (C) 1", "F2 (C) 2","F3 (C)")
+
+
+
+PDX23_seg_list <- list.files(path="../data/raw/arrays/",
+                       pattern = "^23.*_segments.txt$",
+                       recursive = F, 
+                       full.names = T) 
+
+
+BAF_LRR_plot(meta = array_meta, 
+             model_inc = "PD023", chr_inc = c(1:22),
+             sample_inc = PDX23_sample_order,
+             type = "BAF")
+
+
+
+BAF_LRR_plot(meta = array_meta, 
+             seg_list = PDX23_seg_list,
+             model_inc = "PD023", chr_inc = c(1:22),
+             sample_inc = PDX23_sample_order,
+             type = "LRR")
+
+BAF_LRR_plot(seg_list = PDX23_seg_list,
+             model_inc = "PD023", chr_inc = c(1:22),
+             sample_inc = PDX23_sample_order,
+             type = "cytobands")
+```
+
+### Representative BAF plots
+```{r represent_baf}
+
+chr_inc <- c(1:22)
+
+
+raw <- array_meta %>%
+  filter(Model %in% c("PD021","PD023","PD003","PD049","PD056")) %>%
+  filter(SampleLabelSimple %in% c("F1 (1343)","F2 (B)","F1 (131)","F0 (A)","F2 (A) 1")) %>%
+  filter(Arrays_to_analyse !=0) %>%
+  select(Model, Tumor_Report) %>%
+  deframe() %>% # convert to named vector
+  map_dfr(~fread(., skip = "SNP Name"),.id = "name") %>%
+  filter(as.integer(Chr) %in% chr_inc) %>%
+  select(Chr,Position,`B Allele Freq`,`Log R Ratio`,`SNP Name`, name) %>%
+  filter(!is.na(`B Allele Freq`)) %>%
+  # gather(key = "Variable",value = "Value", - Chr, - Position, - name) %>%
+  mutate(Position_mb = Position/1000000) %>%
+  mutate(Chr = factor(as.integer(Chr), levels = chr_inc))
+  
+
+p<- raw %>%
+  # filter(Variable == "B Allele Freq") %>%
+  sample_n(500000) %>%
+  mutate(name = str_replace(name,"PD0","PDX")) %>%
+  mutate(name = if_else(name == "PDX21",paste0(name,"\nCN-low"),paste0(name,"\nCN-high"))) %>%
+  mutate(name = factor(name, levels = c("PDX21\nCN-low","PDX23\nCN-high","PDX03\nCN-high","PDX49\nCN-high","PDX56\nCN-high"))) %>%
+  ggplot(aes(x = Position_mb, y = `B Allele Freq`)) +
+  geom_point(size = 0.3, alpha = 0.3, shape = 16) +
+  facet_grid(name~Chr, scales = "free", space = "free") +
+  labs(x="Position (Mb)") + 
+  scale_y_continuous(breaks = seq(0,1,by=0.5)) +
+  theme(strip.text.y = element_text(angle = 0),
+        axis.text = element_text(size=7))+ 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+pdf("../figures/Representative_BAF_plot.pdf", width = 10, height = 6)
+p
+dev.off()
+
+
+```
