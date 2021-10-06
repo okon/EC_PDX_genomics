@@ -1,0 +1,2674 @@
+---
+title: "EC PDX genomics"
+author: "Olga Kondrashova"
+date: "September 09, 2020"
+output:
+  pdf_document:
+    toc: yes
+---
+
+
+```{r getPackageFunction, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+# Load required packages
+getPackage <- function(pkg, load = TRUE, silent = TRUE, 
+                       repos = "http://cran.us.r-project.org") {
+  if(!suppressMessages(suppressWarnings(require(pkg, character.only = TRUE,
+                                                quietly = silent)))) {
+    install.packages(pkg, repos = repos, quiet = TRUE)
+    source("http://bioconductor.org/biocLite.R")
+    biocLite(pkg)
+  }
+  if(load) 
+    suppressPackageStartupMessages(library(pkg, character.only = TRUE,
+                                           quietly = silent))
+  return("i")
+}
+
+x <- c("ComplexHeatmap", "circlize","viridis", "RColorBrewer", "tidyverse", 
+       "magrittr", "here", "data.table", "gridExtra", "eulerr", "broom", "clonevol", 
+       "MutationalPatterns","deconstructSigs", "scarHRD","R.matlab","YAPSA", "patchwork",
+       "quantsmooth")
+
+invisible(lapply(x, getPackage))
+rm(x)
+```
+
+
+```{r setup000, eval=TRUE, echo=FALSE}
+options(scipen=999)
+
+#theme_set(theme_grey())
+
+# knitr global options
+knitr::opts_chunk$set(root.dir = here(), comment = NA, echo = FALSE, message = FALSE, warnings = FALSE, include = TRUE, fig.align = 'center', fig.path = "figures/")
+```
+
+# Genomic analysis of uterine cancer PDX
+
+This document is compiled from an Rmarkdown file which contains all code necessary to reproduce the analysis for the manuscript draft "Pollock endometrial PDX". Each section describes a different part of analysis.
+
+## Genomic characteristics of PDX
+```{r load_data}
+
+load("./data/EC_PDX_figure_data.RData")
+
+```
+
+```{r define_supporting_info, echo=FALSE}
+sig_list_cosmicv2 <- c("Sig3 (HRD)", "Sig6 (MSI)",
+                       "Sig15 (MSI)","Sig21 (MSI)", "Sig26 (MSI)",
+                       "Sig20 (MSI)", "Sig14 (POLE mut & MSI)",
+                       "Sig10 (POLE mut)",  
+                       "Sig30 (NTHL1 mut)", 
+                       "Sig4 (Smoking)", "Sig5 (Ubiquitous)", 
+                       "Sig2 (APOBEC)","Sig13 (APOBEC)","Sig1 (Age)",
+                       "Sig8 (Unknown)",  "Sig12 (Unknown)", 
+                       "Sig16 (Unknown)", "Sig25 (Unknown)",  "Sig28 (Unknown)", 
+                       "Other")
+
+sig_colours_cosmicv2 <- c( "#943503","#8d69a3",
+                          "#7a5093", "#541e75","#420666",
+                          "#360678","#fa939e",
+                          "#f97886",
+                          "#118866",
+                          "#a0c41c","#809c16",
+                          "#85c1e9","#3498db","#009999",
+                          "#7c94ac", "#7c94ac",
+                          "#6a85a0","#577694","#577694",
+                          "#8d958f")
+names(sig_colours_cosmicv2) <- sig_list_cosmicv2
+
+#Chromosome order
+chr_levels=c("1","2","3","4","5","6","7","8","9","10","11",
+             "12","13","14","15","16","17","18","19","20","21",
+             "22","X")
+
+#Sample factor levels
+PDX_levels = c("PDX24","PDX21","PDX12","PDX52","PDX53",
+               "PDX58","PDX59","PDX23","PDX03","PDX49","PDX56")
+
+SampleLabel_levels = c("Pt","F0 (A)","F0 (A)*","F0 (B)","F0 (D)","F1 (A)","F1 (A)*",
+                       "F1 (B)","F1 (C)","F1 (D)","F2 (A)","F2 (B)",
+                       "F3 (B)","F4 (A)", "F4 (B)")
+
+#CN level order
+CN_levels=c("Hom Del","Copy 1","Copy 2","Copy 3-4","Copy 5-6","Copy >6")
+
+CN_levels_short <- c("HET", "CN7plus", "CN5_6", "CN3_4",
+                     "CN2LOH", "CN1", "CN0", "LOH")
+CN_levels_cols <-c("#9F9E9E", "#4d0000", "#990000", "#ff4d4d", 
+                   "#BAC3D2", "#80bfff", "#0000CC", "#22C0E1")
+CN_levels_labels <- c("Diploid", "Copy >7", "Copy 5-6", "Copy 3-4",
+                      "Copy Neutral LOH", "Copy 1", "Hom Del", "LOH")
+```
+
+
+  
+
+```{r define_functions, echo=FALSE}
+estimate_mode <- function(x) {
+  d <- density(x)
+  d$x[which.max(d$y)]
+}
+
+
+# CNV plot function
+chrom_plot_CNV <-function(segments_plot, purity, type="CNV", palette="", segment_size=6.5, autosomal=FALSE){
+  # Define colour palette
+  if (palette == "") {
+    colours <- c("Hom Del"="#0000CC","Copy 1"="#80bfff","Copy 2"="#D3D3D3",
+                 "Copy 3-4"="#ff4d4d","Copy 5-6"="#990000","Copy >6"="#4d0000")
+  } else if (palette == "AM") {
+    colours <- c("Hom Del"="#3A5723","Copy 1"="#75AF46","Copy 2"="#D9D9D9",
+                 "Copy 3-4"="#FCDB67","Copy 5-6"="#FBC20E","Copy >6"="#E77E35")
+  } 
+  
+  # Filter sex chromosomes
+  if (isTRUE(autosomal)){
+    segments_plot %<>%
+      filter(chromosome %in% 1:22)
+  }
+  
+  segments_plot %<>%
+    mutate(SampleLabel = factor(SampleLabel, levels = rev(levels(SampleLabel))))
+  
+  if (type == "CNV") {
+    baseplot <- ggplot(data=segments_plot) +
+              geom_segment(aes(y=SampleLabel, x=start,
+                               xend=end, yend=SampleLabel,
+                               colour=CNt.groups,size=segment_size)) +
+              scale_color_manual(values=colours)+
+              labs(x=NULL, y=NULL,color="Copy Number:")
+  } else if (type == "LOH") {
+    baseplot <- ggplot(data=segments_plot) +
+      geom_segment(aes(y=SampleLabel,x=start,xend=end, yend=SampleLabel,colour=LOH, size=segment_size)) +
+      scale_color_manual(values = c("FALSE" = "#D3D3D3","TRUE" = "#3DC8E8")) +
+      labs(x=NULL, y=NULL,color="LOH :")
+  }
+  p1 <- purity %>%
+    mutate(SampleLabel = factor(SampleLabel, levels = levels(segments_plot$SampleLabel))) %>%
+    mutate(purity_colour = if_else(purity < 50, TRUE,FALSE)) %>%
+    ggplot(aes(x=1, y=SampleLabel, fill = purity)) +
+    geom_tile() +
+    geom_text(aes(label = paste(round(purity),"%"), colour = purity_colour), size=2.5) + 
+    scale_colour_manual(values = c('TRUE'="black",'FALSE'="white"), guide="none" ) +
+    facet_grid(PDX ~., scales = "free", space = "free") + 
+    labs(y="Samples", x = NULL, fill = "Purity:") + 
+    scale_fill_continuous(low= "#ebfaf8",high ="#04937b", limits = c(0,100)) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.position="bottom",
+          panel.spacing.x=unit(0.2, "lines"),
+          strip.text.y = element_blank())
+    
+  p2 <- baseplot +
+    scale_size_identity() +
+    facet_grid(PDX ~ chromosome, scales="free", space="free") +
+    theme(#legend.key.width=unit(1,"cm"),legend.key.height=unit(1,"cm"),
+          #plot.margin = margin(2,.8,2,.8, "cm"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          legend.position="bottom",
+          panel.spacing.x=unit(0.2, "lines"),
+          strip.text.x = element_text(size = 7, angle = 90))
+  
+  p1 + p2 + plot_layout(widths = c(1, 20))
+  
+}
+
+run_deconstructsigs <- function(data,out_path,out_name,signatures, method = "default", plot=FALSE, cutoff=0.15) {
+  # Run deconstructSigs on all samples
+  for (i in 1:nrow(data)){
+    sample_id=row.names(data[i,])
+    sigs= whichSignatures(tumor.ref = data, 
+                          signatures.ref = signatures, 
+                          sample.id = sample_id,
+                          signature.cutoff = cutoff,
+                          contexts.needed = TRUE,
+                          tri.counts.method = method)
+    # Plot signatures if defined
+    if ( isTRUE(plot)){
+      out_file <- paste0(out_path,"figures/",sample_id,"_",method,"_",out_name,".pdf")
+      pdf(out_file)
+      plotSignatures(sigs)
+      dev.off()
+    }
+    # Combine sig assignments for samples to one dataframe
+    if (exists("sig_final")) { 
+      sig_final <- rbind(sig_final,sigs$weights) 
+    } else { 
+      sig_final <- sigs$weights
+    }
+  }
+  # Subset only detected signatures
+  sig_detected <- sig_final %>%
+    rownames_to_column(var="Sample")%>%
+    gather(Sig, Count, -Sample) %>%
+    group_by(Sig) %>%
+    filter(Count > 0) %>%
+    spread(Sig, Count, fill = 0)
+  
+  out_file <- paste0(out_path,"tables/",method,"_",out_name,".tsv")
+  # Return signature assigment dataframe
+  write.table(sig_detected, out_file ,quote = F, sep = "\t", row.names = F)
+  return(sig_detected)
+}
+
+BAF_LRR_plot <- function(seg_list=NULL, meta=NULL, model_inc, chr_inc, sample_inc, type="BAF"){
+  if (type %in% c("BAF","LRR")){
+    raw <- meta %>%
+      filter(Model == model_inc) %>%
+      filter(SampleLabelSimple %in% sample_inc) %>%
+      select(SampleLabelSimple, Tumor_Report) %>%
+      deframe() %>% # convert to named vector
+      map_dfr(~fread(., skip = "SNP Name"),.id = "name") %>%
+      filter(as.integer(Chr) %in% chr_inc) %>%
+      select(Chr,Position,`B Allele Freq`,`Log R Ratio`,`SNP Name`, name) %>%
+      filter(!is.na(`B Allele Freq`)) %>%
+      # gather(key = "Variable",value = "Value", - Chr, - Position, - name) %>%
+      mutate(Position_mb = Position/1000000) %>%
+      mutate(Chr = factor(as.integer(Chr), levels = chr_inc))
+    if (type == "BAF"){
+      p<- raw %>%
+        # filter(Variable == "B Allele Freq") %>%
+        sample_n(500000) %>%
+        mutate(name = factor(name, levels = unique(sample_inc))) %>%
+        ggplot(aes(x = Position_mb, y = `B Allele Freq`)) +
+        geom_point(size = 0.3, alpha = 0.3, shape = 16) +
+        facet_grid(name~Chr, scales = "free", space = "free") +
+        labs(x="Position (Mb)") + 
+        scale_y_continuous(breaks = seq(0,1,by=0.5)) +
+        theme(strip.text.y = element_text(angle = 0),
+              axis.text = element_text(size=7))
+    }
+  } 
+  if(type %in% c("LRR","cytobands")){
+    seg <- seg_list %>%
+      purrr::set_names(. %>% basename(.) %>% str_remove("_segments.txt")) %>%
+      map_dfr(~read_tsv(., comment = "#"), .id = "name") %>%
+      dplyr::rename(Tumor_Sample = name) %>%
+      filter(as.integer(Chr) %in% chr_inc) %>%
+      mutate(Chr = factor(as.integer(Chr), levels = chr_inc)) %>%
+      left_join(array_meta) %>%
+      filter(SampleLabelSimple %in% sample_inc) %>%
+      mutate(name = factor(SampleLabelSimple, levels = unique(sample_inc)))   %>%
+      mutate(Position_mb = PosSNPstart/1000000,
+             Position_end_mb =  PosSNPend/1000000) %>%
+      filter(Position_end_mb-Position_mb > 1) %>%
+      mutate(Copy_change = if_else(Copy == 2, "no","yes")) 
+    
+    if(type == "LRR"){
+      p <- raw %>%
+        #filter(Variable == "Log R Ratio") %>%
+        group_by(name) %>%
+        sample_n(10000*length(sample_inc)) %>%
+        ungroup() %>%
+        mutate(name = factor(name, levels = unique(sample_inc))) %>%
+        bind_rows(seg %>% select(Position_mb, Position_end_mb, 
+                                 Copy_change, LRR, name, Chr)) %>%
+        ggplot() +
+        geom_point(aes(x = Position_mb, y = `Log R Ratio`), 
+                   size = 0.3, alpha = 0.3, shape = 1, na.rm = TRUE) +
+        geom_segment(aes(x = Position_mb, xend = Position_end_mb,
+                         y = LRR, yend=LRR, colour = Copy_change),
+                     na.rm = TRUE) +
+        scale_colour_manual(values = c("no" = "grey", "yes" = "red")) + 
+        facet_grid(name~Chr, scales = "free_x", space = "free_x") +
+        ylim(-0.7,1) +
+        labs(x="Position (Mb)") + 
+        theme(strip.text.y = element_text(angle = 0),
+              legend.position = "none",
+              axis.text = element_text(size=7))
+    }else if(type == "cytobands"){
+      seg %>%
+        filter(Copy_change == "yes") %>%
+        distinct() %>%
+        rowwise() %>%
+        mutate(cytoband_start = position2Cytoband(chrom = Chr, 
+                                                  position = Position_mb*10^6,
+                                                  units = "hg19",
+                                                  bands = "major"),
+               cytoband_end = position2Cytoband(chrom = Chr, 
+                                                position = Position_end_mb*10^6,
+                                                units = "hg19",
+                                                bands = "major"))  %>%
+        select(cytoband_start, cytoband_end, name) %>%
+      write_tsv(paste0("tables/",model_inc,"_cytobands.tsv"))
+    }
+  }
+  
+  if (type %in% c("BAF","LRR")){
+    if(chr_inc == c(1:22)){
+      p + theme(axis.text.x = element_blank(),
+                axis.ticks.x = element_blank(),
+                axis.title.x = element_blank())
+    } else{
+      p
+    }
+  }
+}
+
+
+
+
+get_hrdetect_score <- function(data, std_data){
+  intercept <- std_data %>%
+    filter(feature == "intercept") %>%
+    pluck("weight")
+  
+  data <- data %>%
+    left_join(std_data) %>%
+    mutate(norm_value = log(value + 1),
+           norm_value = (norm_value - mean)/sd) %>%
+    mutate(weighted_value = norm_value*weight) %>%
+    group_by(Tumor_Sample_Barcode) %>%
+    summarise(sum_values = sum(weighted_value)) %>%
+    mutate(hrd_score = 1/(1 +exp(-(intercept + sum_values)))) %>%
+    select(-sum_values)
+  
+  return(data)
+}
+```
+
+
+
+Create a mutation matrix for PDX samples sequenced with WES or WGS, looking at genes commonly mutated in endometrial cancer (TCGA UCEC and TCGA UCS studies).
+
+```{r createOncoprintMatrix_shortvars_PDX, message=FALSE, warning=FALSE}
+
+# Subset by TCGA UCEC and UCS gene lists
+maf_TCGA_genes <- maf_som_filt %>%
+  filter(!Variant_Classification %in% c("Silent","RNA")) %>%
+  filter(Hugo_Symbol %in% genes_TCGA_mut)
+
+onco_m <- maf_TCGA_genes %>%
+  left_join(pdx_meta) %>%
+  mutate(Alt_Allele = if_else(Tumor_Seq_Allele1 == Reference_Allele,
+                             Tumor_Seq_Allele2,
+                             Tumor_Seq_Allele1)) %>%
+  group_by(PDX,Type) %>%
+  mutate(n_samples=n_distinct(Tumor_Sample_Barcode)) %>%
+  group_by(PDX, Type, Chromosome, Start_Position, End_Position, 
+           Reference_Allele, Alt_Allele,
+           Variant_Classification, Hugo_Symbol) %>%
+  mutate(perc_observed=n()/n_samples*100) %>%
+  select(PDX, Type, SampleLabel, Tumor_Sample_Barcode,Assay,
+         Chromosome, Start_Position, End_Position,
+         Reference_Allele, Alt_Allele, Hugo_Symbol, 
+         Transcript_ID, Variant_Classification, 
+         CDS_Change, Protein_Change, i_TumorVAF_WU,perc_observed,n_samples)
+
+onco_m %>%
+  select(-Tumor_Sample_Barcode,-Type,-perc_observed,-n_samples) %>%
+  group_by(PDX, Chromosome, Start_Position, End_Position,
+         Reference_Allele, Alt_Allele, Hugo_Symbol, 
+         Transcript_ID, Variant_Classification, 
+         CDS_Change, Protein_Change) %>%
+  summarise(SampleLabel = paste0(SampleLabel, collapse="; "),
+            i_TumorVAF_WU = paste0(round(i_TumorVAF_WU,1), collapse="; "),
+            Assay = paste0(Assay, collapse="; ")) %>%
+  write_tsv("tables/Somatic_mutations_complexheatmap.tsv")
+
+
+onco_m %<>%
+  ungroup() %>%
+  filter(Type == "PDX") %>%
+  group_by(PDX,Type, Chromosome, Start_Position, End_Position, 
+           Reference_Allele, Alt_Allele,
+           Variant_Classification, Hugo_Symbol) %>%
+  mutate(perc_observed=n()/n_samples*100) %>%
+  filter(perc_observed == 100) %>%
+  summarise(Mean_VAF = mean(i_TumorVAF_WU)) %>%
+  mutate(Mut_Type = case_when(str_detect(Variant_Classification,"Frame_Shift") ~ "FS",
+                              str_detect(Variant_Classification,"Missense") ~ "MUT",
+                              str_detect(Variant_Classification,"Nonsense") ~ "NS",
+                              str_detect(Variant_Classification,"Splice") ~ "SPLICE",
+                              TRUE ~ "INDEL")) %>%
+  ungroup() %>%
+  mutate(Sample = paste(PDX,Type,sep = "_")) %>%
+  group_by(Sample,Hugo_Symbol) %>%
+  summarise(Mut_Type_merged = paste(Mut_Type, collapse = ";")) %>%
+  mutate(Mut_Type_merged = if_else(grepl(";",Mut_Type_merged),
+                                   "MULTI",Mut_Type_merged)) %>%
+  spread(key = Sample, value = Mut_Type_merged)
+  
+```
+
+
+Next, assess MSIsensor results. This tool was run on all WES and WGS data.
+Cut-off value of 3.5 is used to define MSI-high and -low tumours.
+
+```{r plot_MSI}
+
+knitr::kable(msi)
+
+msi %>%
+  ggplot(.)+
+  geom_bar(aes(x = SampleLabel,y = msi_score),stat = "identity")+
+  geom_hline(yintercept=3,colour="black",linetype = "dashed")+
+  labs(y="MSI Score (%)",title="MSISensor prediction")+
+  facet_grid(.~PDX, scales= "free_x", space = "free_x") +
+  scale_fill_brewer(palette="Paired")+
+  theme(axis.text.x=element_text(angle=90,hjust=1, vjust = 0.5),
+        plot.title=element_text(hjust=0.5),
+        strip.text.x = element_text(angle = 90))
+
+```
+
+
+Look at all somatic variants, not just with consequence (only variants that passed filters). Then, calculate somatic mutation rate (SMR/Mutations per Mb/TMB).
+
+```{r plot_TMB, echo=FALSE, cache=TRUE, warning=FALSE, message=FALSE}
+
+# Calculate somatic mutation rate (TMB)
+# divide by 3000 if WGS or 70 if WES
+TMB <- maf_sp %>% 
+  left_join(pdx_meta) %>%
+  count(Tumor_Sample_Barcode, SampleLabel, PDX, Type, Assay) %>%
+  mutate(TMB = if_else(Assay == "WES",n/70, n/3000)) 
+
+
+knitr::kable(TMB)
+
+
+TMB %>%
+  ggplot(.)+
+  geom_bar(aes(x = SampleLabel,y = TMB), stat = "identity")+
+  labs(y = "Mut/Mb (log10)", title = "Somatic Mutation Rate")+
+  scale_fill_brewer(palette = "Paired")+
+  scale_y_log10() +
+  facet_grid(.~PDX, space = "free_x", scales = "free_x") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        plot.title = element_text(hjust = 0.5),
+        strip.text.x = element_text(angle = 90))
+
+```
+
+Look at the de novo mutational signature analysis performed using SigProfiler on MATLAB platform.
+This was done on WES samples only.
+```{r plot_denovo_mut_sigs_WES, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Select predominant signature per sample
+sig_perc_max_dn <- sig_perc_melt_dn %>%
+  group_by(PDX, Tumor_Sample_Barcode) %>%
+  filter(Perc == max(Perc)) %>%
+  ungroup() %>%
+  dplyr::rename(Sig_max = Sig)
+
+# Summarise by sample type (PDX and Pt)
+sig_perc_max_summary_dn <- sig_perc_max_dn %>%
+  mutate(Sample = paste0(PDX,"_",Type)) %>%
+  count(PDX,Sample, Sig_Def) %>%
+  select(-n)
+
+denovo_PDX_sig_levels <- c("Sig 1 - Age (Sig C)","Sig 5/19/30-like - Mixed (Sig G)",
+                           "Sig 2 - APOBEC (Sig D)","Sig 10 - POLE (Sig A)",
+                           "Sig 6 - MSI (Sig F)", "Sig 6 - MSI (Sig E)",
+                           "Sig 20 - MSI (Sig B)")
+
+# Now remove joint MSI-like signature
+sig_perc_melt_dn_1 <- sig_perc_melt_dn %>%
+  filter(Sig != "Sigs_E_F") %>%
+  left_join(sig_perc_max_dn %>% 
+              select(testSampleLabel,Tumor_Sample_Barcode,
+                     PDX,Type,Assay,SampleLabel,Sig_max)) %>% 
+  mutate(Sig_Cosmic = factor(Sig_Cosmic, levels = denovo_PDX_sig_levels)) %>%
+  mutate(SampleLabel = factor(SampleLabel, levels =unique(SampleLabel)))
+
+denovo_PDX_sig_cols <- c("#A6D854","#FC8D62","#8DA0CB",
+                         "#66C2A5","#f4cbe4", "#eeabd4","#E78AC3")
+names(denovo_PDX_sig_cols) <- levels(sig_perc_melt_dn$Sig_Cosmic)
+
+sig_perc_melt_dn_1 %<>%
+  select(-Tumor_Sample_Barcode, -testSampleLabel) 
+
+ggplot(sig_perc_melt_dn_1) +
+  geom_bar(aes(x = SampleLabel,y = Perc, fill = Sig_Cosmic), 
+           stat = "identity") +
+  scale_fill_manual(values =  denovo_PDX_sig_cols) +
+  labs(x = "", y = "Contribution (%)", 
+       fill = "Sig. Cosmic - aetiology\n (Sig. ID de novo)") +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        strip.text = element_text(angle = 90)) 
+
+```
+
+
+Since de novo signature assignment did not identify sig 3 (associated with HRD), COSMIC signature fitting was performed.
+Used both, WGS and WES data for this.
+No samples were excluded (all had >50 mutations).
+
+```{r run_dSigs_PDX}
+# All combined
+maf_sp_SNV <- maf_sp %>% 
+  filter(Variant_Type == "SNP") %>%
+  left_join(pdx_meta) %>%
+  mutate(alt = if_else(Reference_Allele == Tumor_Seq_Allele1, 
+                      Tumor_Seq_Allele2, Tumor_Seq_Allele1)) %>%
+  filter(Chromosome %in% chr_levels) %>%
+  mutate(chr = paste0("chr",Chromosome)) %>%
+  mutate(Start_Position = as.numeric(Start_Position)) %>%
+  select(Tumor_Sample_Barcode, chr, Start_Position, Reference_Allele, alt) %>%
+  as.data.frame()
+
+# Convert to mutation matrix
+sig_input_PDX <- mut.to.sigs.input(mut.ref = maf_sp_SNV, 
+                                sample.id = "Tumor_Sample_Barcode", 
+                                chr = "chr", 
+                                pos = "Start_Position", 
+                                ref = "Reference_Allele", 
+                                alt = "alt")
+
+
+sig_PDX_cosmic_default <- run_deconstructsigs(data = sig_input_PDX, 
+                                          out_path = "./",
+                                          out_name = "cosmicv2_sig",
+                                          signatures = cosmic_sigs,
+                                          method = "default", 
+                                          plot = F)
+
+```
+
+```{r parse_dSigs_out_cosmicv2_PDX}
+sig_PDX_cosmic_melt <- sig_PDX_cosmic_default %>%
+  replace(., is.na(.), 0)%>%
+  mutate(Other = (1- rowSums(.[-1]))) %>% #Calculate up to 100%
+  gather(Sig, Count, -Sample) %>%
+  filter(Count != 0) %>%
+  mutate(Sig_name = case_when(Sig == "Sig1" ~ "Age",
+                              Sig == "Sig10" ~ "POLE mut",
+                              Sig == "Sig12" ~ "Unknown",
+                              Sig == "Sig13" ~ "APOBEC",
+                              Sig == "Sig14" ~ "POLE mut & MSI",
+                              Sig == "Sig15" ~ "MSI",
+                              Sig == "Sig16" ~ "Unknown",
+                              Sig == "Sig2" ~ "APOBEC",
+                              Sig == "Sig20" ~ "MSI",
+                              Sig == "Sig21" ~ "MSI",
+                              Sig == "Sig28" ~ "Unknown",
+                              Sig == "Sig8" ~ "Unknown",
+                              Sig == "Sig26" ~ "MSI",
+                              Sig == "Sig3" ~ "HRD",
+                              Sig == "Sig30" ~ "NTHL1 mut",
+                              Sig == "Sig4" ~ "Smoking",
+                              Sig == "Sig5" ~ "Ubiquitous",
+                              Sig == "Sig6" ~ "MSI",
+                              Sig == "Other" ~ "")) %>%
+  mutate(Sig_full = if_else(Sig == "Other", Sig, paste0(Sig," (",Sig_name,")")))
+
+sig_PDX_cosmic_melt %<>%
+  mutate(Sig_full = factor(Sig_full, levels = rev(sig_list_cosmicv2)))
+
+sig_PDX_cosmic_melt %>%
+  select(1:3) %>%
+  arrange(Sample,-Count) %>%
+  mutate(Count = round(Count,3)) %>%
+  write_tsv(paste0("./tables/PDX_cosmicv2_sig_melt.tsv"))
+
+```
+
+
+```{r plot_all_dSigs_PDX, fig.height=6,fig.width=10}
+# Select predominant signature per sample group
+sig_PDX_cosmic_melt_max_summary <- sig_PDX_cosmic_melt %>%
+  select(Sample,Sig_name,Count,Sig) %>% 
+  distinct() %>%
+  group_by(Sample) %>%
+  filter(! Sig_name %in% c("Age","","Unknown")) %>%
+  mutate(Sig_name = str_remove(Sig_name,"POLE mut & ")) %>%
+  group_by(Sample,Sig_name) %>%
+  summarise(Count_combined = sum(Count)) %>%
+  filter(Count_combined == max(Count_combined)) %>%
+  full_join(sig_PDX_cosmic_melt %>% select(Sample) %>% distinct(),
+            by = "Sample") %>%
+  left_join(pdx_meta, by = c("Sample"="Tumor_Sample_Barcode")) %>%
+  mutate(Sig_name = case_when(Count_combined < 0.3 ~ "Mixed",
+                              TRUE ~ Sig_name))  %>%
+  ungroup() %>%
+  mutate(Sample = paste0(PDX,"_",Type)) %>%
+  select(PDX, Sample, Sig_name) %>%
+  distinct()
+
+
+sig_PDX_cosmic_melt %>%
+  arrange(Sig_full,Count) %>%
+  left_join(pdx_meta, by = c("Sample"="Tumor_Sample_Barcode")) %>%
+  ggplot() +
+  geom_bar(aes(x=SampleLabel,y=Count,fill=Sig_full),
+           position = "stack",stat="identity", color=NA)+
+  labs(x = "",y="Proportion",fill="Signature") +
+  scale_fill_manual(values=sig_colours_cosmicv2) +
+  guides (fill = guide_legend(ncol=2)) +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") +
+  theme(axis.text.x=element_text(angle=90,hjust=1),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "right")
+
+
+sig3_prop <- sig_PDX_cosmic_melt %>%
+  dplyr::rename(Tumor_Sample_Barcode = Sample, Proportion = Count) %>%
+  filter(Sig == "Sig3") %>%
+  select(Tumor_Sample_Barcode,Proportion )
+
+```
+
+
+```{r CNV_seg_for_complexHeatmap, warning=FALSE, message=FALSE}
+
+CNV_WGS_seg <- CNV_WGS %>% 
+  mutate(SegmentLength = (segment.length)/1000000) %>%
+  filter(chromosome %in% 1:22  & SegmentLength > 10 & 
+           (tumour.total.cn >=2.7 | tumour.total.cn <= 1.3)) %>% #1Mb
+  count(Tumor_Sample_Barcode,.drop = FALSE) %>%
+  left_join(pdx_meta) %>%
+  select(n, Tumor_Sample_Barcode,PDX, Assay,Type)
+
+CNV_array_seg <- CNV_array_seg_full  %>%
+  mutate(SegmentLength = (PosSNPend-PosSNPstart)/1000000) %>%
+  mutate(Tumor_Sample = factor(Tumor_Sample, levels = unique(Tumor_Sample))) %>%
+  filter(Chr < 23  & SegmentLength > 10 & (nCN >=2.7 | nCN <= 1.3)) %>% #10Mb to filter out noisy array data
+  count(Tumor_Sample,.drop = FALSE) %>%
+  left_join(array_meta)  %>%
+  filter(!Exclude_choppy) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample")) %>%
+  select(n, Tumor_Sample_Barcode,PDX, Assay,Type)
+
+
+```
+
+```{r plot_segments_CNV }
+
+CNV_array_seg %>% 
+  ungroup() %>%
+  bind_rows(CNV_WGS_seg) %>%
+  left_join(pdx_meta) %>%
+  mutate(SampleLabel = factor(SampleLabel,
+                              levels = SampleLabel_levels)) %>%
+  mutate(PDX = factor(PDX, levels = PDX_levels))  %>%
+  ggplot(.) +
+  geom_bar(aes(x=SampleLabel, y= n), stat = "identity") +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") + 
+  labs(y = "Number of >10Mb segments\n with abnormal CN", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        strip.text.x = element_text(angle = 90))
+
+```
+
+```{r CNV_perc_for_complexHeatmap }
+# CALCULATE TOTAL PERCENT OF GENOMIC CNV
+WGS_CNV_percent <- CNV_WGS_summary %>%
+  filter(variable %in% c("CN0","CN1","CN3_4","CN5_6","CN7plus")) %>%
+  group_by(PDX,Tumor_Sample_Barcode) %>%
+  summarise(TotalCNV_percent = sum(value))
+
+# CALCULATE TOTAL PERCENT OF GENOMIC CNV
+array_CNV_percent <- CNV_array_summary %>%
+  mutate(TotalCNV_percent = CN0 + CN1 + CN3_4 + CN5_6 + CN7plus) %>%
+  select(PDX, Tumor_Sample_Barcode, TotalCNV_percent)
+
+
+```
+
+
+```{r plot_perc_genomeCNV }
+array_CNV_percent %>%
+  bind_rows(WGS_CNV_percent) %>%
+  left_join(pdx_meta) %>%
+  mutate(SampleLabel = factor(SampleLabel,
+                              levels = SampleLabel_levels)) %>%
+  mutate(PDX = factor(PDX, levels = PDX_levels))  %>%
+  ggplot(.) +
+  geom_bar(aes(x=SampleLabel, y= TotalCNV_percent), stat = "identity") +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") + 
+  labs(y = "% genome with CNV", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        strip.text.x = element_text(angle = 90))
+```
+
+```{r CNV_genes_complexHeatmap, message=FALSE, warning=FALSE}
+
+CNV_summary_stats_comb <- array_summary_stats %>%
+  select(Ploidy,Tumor_Sample) %>%
+  left_join(array_meta %>% 
+              select(Tumor_Sample,Arrays_to_analyse,SeqSampleLabel, Exclude_choppy)) %>%
+  filter(Arrays_to_analyse %in% 1:2 ) %>%
+  filter(!Exclude_choppy) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample"))  %>%
+  bind_rows(CNV_WGS_summary_stats %>%
+          select(Tumor_Sample_Barcode, ploidy) %>%
+          dplyr::rename(Ploidy = ploidy)) %>%
+  select(Ploidy, Tumor_Sample_Barcode)
+
+# For oncoprint (only PDX) 
+onco_m_CNV <- CNV_array_gene %>%
+  left_join(array_meta %>% 
+              select(Tumor_Sample,Arrays_to_analyse,SeqSampleLabel, Exclude_choppy)) %>%
+  filter(Arrays_to_analyse %in% 1:2 ) %>%
+  filter(!Exclude_choppy) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample"))  %>%
+  mutate( Chr = as.character(Chr)) %>%
+  bind_rows(CNV_WGS_genes %>% 
+              left_join(pdx_meta) %>%
+              dplyr::rename(GeneID= gene_id,Symbol =gene_symbol,
+                            Chr= chromosome, Gene_start=gene_start, 
+                            Gene_end = gene_end,GAP_call=ASCAT_call)) %>%
+  filter(Symbol %in% genes_TCGA_cnv) %>%
+  left_join(CNV_summary_stats_comb)
+
+onco_m_CNV %>%
+  filter(Copynumber >= round(Ploidy)+ 1 | Copynumber < 2) %>% 
+  select(Symbol, PercentGeneCovered, Ploidy, Copynumber,
+         PDX, SampleLabel, Type) %>%
+  group_by(PDX, Symbol) %>%
+  summarise_all(funs(paste0(., collapse = "; "))) %>%
+  write_tsv("tables/Somatic_CNV_complexheatmap.tsv")
+
+
+onco_m_CNV %<>%
+  filter(Type == "PDX") %>%
+  group_by(PDX) %>%
+  mutate(n_samples=n_distinct(SampleLabel)) %>%
+  filter(Copynumber >= round(Ploidy)+ 1 | Copynumber < 2) %>% 
+  group_by(PDX, Symbol) %>%
+  mutate(perc_observed=n()/n_samples*100) %>%
+  filter(perc_observed == 100) %>%
+  mutate(Mean_Copynumber = mean(Copynumber)) %>%
+  mutate(Mean_Ploidy = mean(Ploidy)) %>%
+  mutate(CNV = if_else(Mean_Copynumber >= round(Mean_Ploidy)+3, "AMP",
+                       if_else(Mean_Copynumber >= round(Mean_Ploidy)+ 1, "GAIN",
+                               if_else(Mean_Copynumber <1,"HOMDEL","DEL")))) %>%
+  mutate(Sample = paste(PDX,Type,sep = "_")) %>%
+  ungroup() %>%
+  select(Sample,Symbol,CNV) %>%
+  distinct()%>%
+  spread(key = Sample, value = CNV) %>%
+  dplyr::rename(Hugo_Symbol = Symbol)
+
+```
+
+Now that the key genomic features are pre-processed, can proceed with merging that data to prepare Fig 2 (complex heatmap of PDX samples).
+```{r prep_complexHeatmap_PDX_WES, echo=FALSE, message=FALSE, warning=FALSE}
+
+WES_ht <- TMB %>%
+  left_join(bind_rows(array_CNV_percent,
+                      WGS_CNV_percent)) %>%
+  left_join(msi, c("Tumor_Sample_Barcode", "Type", "Assay", "PDX")) %>%
+  left_join(bind_rows(CNV_array_seg,
+                      CNV_WGS_seg) %>%
+              dplyr::rename(seg_number = n)) %>%
+  filter(Type != "Pt") %>%
+  select(PDX, Type, TotalCNV_percent, TMB, msi_score, seg_number) %>%
+  group_by(PDX,Type) %>%
+  summarise_all(funs(mean), na.rm = TRUE) %>%
+  mutate(TMB = round(TMB), TotalCNV_percent = round(TotalCNV_percent),
+         msi_score = round(msi_score,2), seg_number = round(seg_number)) %>%
+  mutate(Sample = paste(PDX, Type, sep = "_")) %>%
+  full_join(sig_PDX_cosmic_melt_max_summary) %>%
+  filter(!grepl("Pt",Sample)) %>%
+  mutate(TCGA=case_when(PDX  %in% c("PDX23","PDX03", "PDX49", "PDX56") ~ "CN-high/p53mut",
+                        PDX %in% c("PDX12", "PDX52", "PDX53", "PDX58", "PDX59") ~ "MMRd",
+                        PDX %in% c("PDX21") ~ "CN-low",
+                        PDX %in% c("PDX24") ~ "POLE")) %>%
+  mutate(TCGA = factor(TCGA, levels = c("POLE","CN-low","MMRd","CN-high/p53mut"))) %>%
+  mutate(Histology=case_when(PDX  %in% c("PDX03", "PDX49", "PDX56") ~ "UCS",
+                        PDX %in% c("PDX24","PDX21","PDX12","PDX58", "PDX59") ~ "HG EEC",
+                        PDX %in% c("PDX23","PDX53") ~ "HG SEC",
+                        PDX %in% c("PDX52") ~ "LG EEC")) %>%
+  mutate(CNV_perc_cat = case_when(TotalCNV_percent >= 25 ~"CNV high",
+                                  TotalCNV_percent >= 10 ~ "CNV moderate",
+                                  TotalCNV_percent >= 1 ~ "CNV low",
+                                  TotalCNV_percent <1 ~ "CNV stable")) %>%
+  arrange(TCGA,PDX)
+
+
+# Merge mutation and CNV oncoprint matrices
+merged_onco <- bind_rows(onco_m,onco_m_CNV) %>%
+  gather(var, val, -Hugo_Symbol, na.rm = TRUE) %>%
+  group_by(Hugo_Symbol, var) %>%
+  summarise(val=paste(val,collapse=';')) %>%
+  spread(var, val) %>%
+  filter_all(any_vars(!is.na(.)))
+
+
+merged_onco[,WES_ht$Sample[!WES_ht$Sample %in% 
+                                          names(merged_onco)]] = NA #Adding samples without somatic events
+merged_onco <- merged_onco[,c("Hugo_Symbol",WES_ht$Sample)] #Arranging in the same order
+
+onco_m_ht <- as.matrix(merged_onco[,-1])
+row.names(onco_m_ht) <- merged_onco$Hugo_Symbol
+```
+
+
+```{r param_complexHeatmap_PDX_WES, echo=FALSE, message=FALSE, warning=FALSE}
+# Oncoprint parameters 
+alter_fun = list(
+  background = function(x, y, w, h) 
+    grid.rect(x, y, w, h, gp = gpar(fill = "#ECEFF1", col = "white")),
+  MUT = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#CE93D8", col = "white")),
+  NS = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#90CAF9", col = "white")),
+  FS = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#FFAB91", col = "white")),
+  MULTI = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#F48FB1", col = "white")),
+  SPLICE = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#80DEEA", col = "white")),
+  INDEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#E6EE9C", col = "white")),
+  GAIN = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5, gp = gpar(fill = "#43A047", col = NA)),
+  AMP = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5, gp = gpar(fill = "#1B5E20", col = NA)),
+  DEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#D84315", col = NA)),
+  HOMDEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#750808", col = NA))
+)
+
+mut_fills = c("MUT" = "#CE93D8", "FS" = "#FFAB91", "SPLICE" = "#80DEEA", "INDEL" = "#E6EE9C", "NS" = "#90CAF9",
+              "MULTI" = "#F48FB1",  "GAIN" = "#43A047", "AMP" = "#1B5E20", "DEL" = "#D84315", "HOMDEL" = "#750808")
+mut_order = c("MUT","FS","SPLICE","INDEL","NS","MULTI","GAIN","AMP","DEL", "HOMDEL")
+
+mut_labels =c("Missense", "Frameshift", "Splice-site", "In-frame indel",
+              "Nonsense", "Multiple mutations", "Gain","Amplification","Deletion","Hom Deletion")
+
+# Annotation parameters 
+MSI_cols= colorRamp2(c(0,3.5,25), c("#ebfaf8","#abebe2","#04937b"))
+MSI_names = c("0","3.5 (MSI High)", "25")
+
+CNV_perc_cols= c("#04937b","#68decb","#aaeae1","#ebfaf8")
+names(CNV_perc_cols)= c("CNV high","CNV moderate","CNV low", "CNV stable")
+CNV_labels= c(">25%","10-25%","1-10%","<1%")
+
+
+CNV_seg_cols= colorRamp2(c(0,20,50), c("#ebfaf8","#aaeae1","#04937b"))
+CNV_seg_names = c("0","20","50")
+
+Mut_sig_cols=c("#7a5093", "#f97886", "#85c1e9", "#E1C699")
+names(Mut_sig_cols)= c("MSI","POLE mut", "APOBEC", "Mixed")
+
+Hist_cols = c("#E95D59","#B9D983","#6EA12C","#926CAE")
+names(Hist_cols) = c("HG SEC","LG EEC","HG EEC","UCS")
+
+TMB_breaks <- c(1,10,100)
+```
+
+
+```{r annot_complexHeatmap_PDX_WES, echo=FALSE, message=FALSE, warning=FALSE}
+
+ha_top = HeatmapAnnotation(Histology = WES_ht$Histology,
+                           Model = anno_text(WES_ht$PDX, 
+                                             rot=90,gp = gpar(fontsize=8)),
+                           `Mut/Mb` = anno_barplot(log10(WES_ht$TMB), 
+                                                   axis = TRUE, border = FALSE, 
+                                                   bar_width = 0.95, height = unit(2, "cm"),
+                                                   axis_param = list(gp = gpar(fontsize = 6),
+                                                                     at = log10(TMB_breaks), 
+                                                                           labels =TMB_breaks),
+                                                   gp = gpar(col = "#566573",
+                                                             fill = "#566573")),
+                           col = list(Histology = Hist_cols),
+                           show_annotation_name = TRUE,
+                           show_legend = FALSE,
+                           annotation_name_side = c("right","right","left"),
+                           annotation_name_rot = c(0, 0, 90),
+                           na_col = "#E9E9E9", gp = gpar(col = "white"),
+                           annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+ha_bottom = HeatmapAnnotation(MSI = WES_ht$msi_score,
+                              `CNA %` = WES_ht$CNV_perc_cat,
+                              `CNA seg.` = WES_ht$seg_number,
+                              `Mut. sig.` = WES_ht$Sig_name,
+                              show_annotation_name = TRUE,
+                              col = list(MSI = MSI_cols, `CNA %` = CNV_perc_cols, 
+                                         `CNA seg.` = CNV_seg_cols, `Mut. sig.` = Mut_sig_cols),
+                              na_col = "#E9E9E9",
+                              show_legend = FALSE, gp = gpar(col = "white"),
+                              annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"),
+                              annotation_height = unit(c(0.5,0.5,0.5), "cm")) # annotation_height not working
+
+
+# Legends!
+annot_leg <- list(
+  Legend(title = "Histology", labels = names(Hist_cols), 
+         legend_gp = gpar(fill = Hist_cols), 
+         labels_gp = gpar(fontsize = 8), 
+         title_gp = gpar(fontsize = 9),
+         ncol  = 2),#, fontface = "bold"))
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels, 
+         legend_gp = gpar(fill = mut_fills), labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),# fontface = "bold"),
+         ncol = 2),
+  Legend(title = "MSISensor", col_fun = MSI_cols, at = c(0, 3.5, 25), 
+         labels = MSI_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),# fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "Percent of genome with CNA", labels = CNV_labels, 
+         legend_gp = gpar(fill = CNV_perc_cols), 
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9)),# fontface = "bold")),
+  Legend(title = "Number of CNA segments", col_fun = CNV_seg_cols, 
+         at = c(0,20,40), labels = CNV_seg_names,
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),#, fontface = "bold"),
+        direction = "horizontal"),  
+  Legend(title = "Mutational Signature", labels = names(Mut_sig_cols), 
+         legend_gp = gpar(fill = Mut_sig_cols), 
+         labels_gp = gpar(fontsize = 8), 
+         title_gp = gpar(fontsize = 9),
+         ncol = 2)#, fontface = "bold"))
+)
+
+```
+
+```{r plot_complexHeatmap_PDX_WES, echo=FALSE, message=FALSE, warning=FALSE}
+ht <-oncoPrint(onco_m_ht, 
+               alter_fun = alter_fun,
+               col = mut_fills,
+               right_annotation = NULL,
+               show_heatmap_legend = FALSE,
+               column_order = colnames(onco_m_ht),
+               row_order = intersect(union(genes_TCGA_mut,genes_TCGA_cnv),
+                                     row.names(onco_m_ht)),
+               column_split = factor(WES_ht$TCGA,
+                                     levels = unique(WES_ht$TCGA)),
+               column_title_gp = gpar(fill = c("#36A7CC","#61CA73","#F4C94F","#C63B55"), 
+                                      col = "white", fontface = "bold",fontsize = 7.2, 
+                                      border = FALSE),
+               column_gap = unit(3, "mm"),
+               show_pct = F,
+               top_annotation = ha_top,
+               bottom_annotation = ha_bottom,
+               row_names_gp = gpar(fontface = "italic", fontsize = 5.5))
+
+draw(ht,annotation_legend_list = annot_leg)
+
+```
+
+
+## Genomic profiles - all samples
+
+This is for new supplementary figure showing all samples, not just PDX models.
+```{r prep_complexHeatmap_all, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Select predominant signature per sample group
+sig_PDX_cosmic_melt_max_summary_all <- sig_PDX_cosmic_melt %>%
+  select(Sample,Sig_name,Count,Sig) %>% 
+  distinct() %>%
+  group_by(Sample) %>%
+  filter(! Sig_name %in% c("Age","","Unknown","Ubiquitous")) %>%
+  mutate(Sig_name = str_remove(Sig_name,"POLE mut & ")) %>%
+  group_by(Sample,Sig_name) %>%
+  summarise(Count_combined = sum(Count)) %>%
+  filter(Count_combined == max(Count_combined)) %>%
+  full_join(sig_PDX_cosmic_melt %>% select(Sample) %>% distinct(),
+            by = "Sample") %>%
+  left_join(pdx_meta, by = c("Sample"="Tumor_Sample_Barcode")) %>%
+  mutate(Sig_name = case_when(Count_combined < 0.3 ~ "Mixed",
+                              TRUE ~ Sig_name))  %>%
+  mutate(Sig_name = replace_na(Sig_name,"Other")) %>%
+  ungroup() %>%
+  mutate(Tumor_Sample_Barcode = Sample) %>%
+  select(PDX, Tumor_Sample_Barcode, Sig_name) %>%
+  distinct()
+
+WES_ht_all <- TMB %>%
+  left_join(bind_rows(array_CNV_percent,
+                      WGS_CNV_percent)) %>%
+  left_join(msi, c("Tumor_Sample_Barcode", "Type", "Assay", "PDX")) %>%
+  left_join(bind_rows(CNV_array_seg,
+                      CNV_WGS_seg) %>%
+              dplyr::rename(seg_number = n)) %>%
+  select(PDX, Tumor_Sample_Barcode, TotalCNV_percent, TMB, msi_score, seg_number) %>%
+  mutate(TMB = round(TMB,1), TotalCNV_percent = round(TotalCNV_percent),
+         msi_score = round(msi_score,2), seg_number = round(seg_number)) %>%
+  full_join(sig_PDX_cosmic_melt_max_summary_all) %>%
+  mutate(TCGA=case_when(PDX  %in% c("PDX23","PDX03", "PDX49", "PDX56") ~ "CN-high/p53mut",
+                        PDX %in% c("PDX12", "PDX52", "PDX53", "PDX58", "PDX59") ~ "MMRd",
+                        PDX %in% c("PDX21") ~ "CN-low",
+                        PDX %in% c("PDX24") ~ "POLE")) %>%
+  mutate(TCGA = factor(TCGA, levels = c("POLE","CN-low","MMRd","CN-high/p53mut"))) %>%
+  mutate(Histology=case_when(PDX  %in% c("PDX03", "PDX49", "PDX56") ~ "UCS",
+                        PDX %in% c("PDX24","PDX21","PDX12","PDX58", "PDX59") ~ "HG EEC",
+                        PDX %in% c("PDX23","PDX53") ~ "HG SEC",
+                        PDX %in% c("PDX52") ~ "LG EEC")) %>%
+  mutate(CNV_perc_cat = case_when(TotalCNV_percent >= 25 ~"CNV high",
+                                  TotalCNV_percent >= 10 ~ "CNV moderate",
+                                  TotalCNV_percent >= 1 ~ "CNV low",
+                                  TotalCNV_percent <1 ~ "CNV stable")) %>%
+  left_join(pdx_meta)  %>%
+  mutate(SampleLabel= factor(SampleLabel, levels = SampleLabel_levels)) %>%
+  arrange(TCGA,PDX, SampleLabel) 
+
+
+```
+
+```{r create_oncomatrix_all, message=FALSE, warning=FALSE}
+
+onco_m_all <- maf_TCGA_genes %>%
+  left_join(pdx_meta) %>%
+  #filter(Assay != "WGS" & Type != "Pt") %>%
+  #filter (Eff_Impact != "LOW") %>% # Filter LOW predicted impact (new start site...)
+  #filter(dbSNP_AF == "unknown" | dbSNP_AF < 0.01) %>% # Filter out common dbSNP variants 
+  mutate(Alt_Allele = if_else(Tumor_Seq_Allele1 == Reference_Allele,
+                             Tumor_Seq_Allele2,
+                             Tumor_Seq_Allele1)) %>%
+  select(PDX, Type, SampleLabel, Tumor_Sample_Barcode,Assay,
+         Chromosome, Start_Position, End_Position,
+         Reference_Allele, Alt_Allele, Hugo_Symbol, 
+         Transcript_ID, Variant_Classification, 
+         CDS_Change, Protein_Change, i_TumorVAF_WU) %>%
+  mutate(Mut_Type = case_when(str_detect(Variant_Classification,"Frame_Shift") ~ "FS",
+                              str_detect(Variant_Classification,"Missense") ~ "MUT",
+                              str_detect(Variant_Classification,"Nonsense") ~ "NS",
+                              str_detect(Variant_Classification,"Splice") ~ "SPLICE",
+                              TRUE ~ "INDEL")) %>%
+  group_by(Tumor_Sample_Barcode, Hugo_Symbol) %>%
+  summarise(Mut_Type_merged = paste(Mut_Type, collapse = ";")) %>%
+  mutate(Mut_Type_merged = if_else(grepl(";",Mut_Type_merged),
+                                   "MULTI",Mut_Type_merged)) %>%
+  spread(key = Tumor_Sample_Barcode, value = Mut_Type_merged)
+
+
+# For oncoprint (only PDX) 
+onco_m_CNV_all <- CNV_array_gene %>%
+  left_join(array_meta %>% 
+              select(Tumor_Sample,Arrays_to_analyse,SeqSampleLabel, Exclude_choppy)) %>%
+  filter(Arrays_to_analyse %in% 1:2 ) %>%
+  filter(!Exclude_choppy) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample"))  %>%
+  mutate(Chr = as.character(Chr)) %>%
+  bind_rows(CNV_WGS_genes %>% 
+              left_join(pdx_meta) %>%
+              dplyr::rename(GeneID= gene_id,Symbol =gene_symbol,
+                            Chr= chromosome, Gene_start=gene_start, 
+                            Gene_end = gene_end,GAP_call=ASCAT_call)) %>%
+  filter(Symbol %in% genes_TCGA_cnv) %>%
+  left_join(CNV_summary_stats_comb) %>%
+  filter(Copynumber >= Ploidy+ 1 | Copynumber < 2) %>% 
+  mutate(CNV = case_when(Copynumber >= Ploidy+3 ~ "AMP",
+                         Copynumber >= Ploidy+ 1 ~ "GAIN",
+                         Copynumber <1 ~"HOMDEL",
+                         Copynumber == 1 ~ "DEL")) %>%
+  select(Tumor_Sample_Barcode,Symbol,CNV) %>%
+  distinct()%>%
+  spread(key = Tumor_Sample_Barcode, value = CNV) %>%
+  dplyr::rename(Hugo_Symbol = Symbol)
+
+
+# Merge mutation and CNV oncoprint matrices
+merged_onco_all <- bind_rows(onco_m_all,onco_m_CNV_all) %>%
+  gather(var, val, -Hugo_Symbol, na.rm = TRUE) %>%
+  group_by(Hugo_Symbol, var) %>%
+  summarise(val=paste(val,collapse=';')) %>%
+  spread(var, val) %>%
+  filter_all(any_vars(!is.na(.)))
+
+
+merged_onco_all[,WES_ht_all$Tumor_Sample_Barcode[!WES_ht_all$Tumor_Sample_Barcode %in% 
+                                          names(merged_onco_all)]] <- NA #Adding samples without somatic events
+merged_onco_all <- merged_onco_all[,c("Hugo_Symbol",WES_ht_all$Tumor_Sample_Barcode)] #Arranging in the same order
+
+onco_m_all_ht <- as.matrix(merged_onco_all[,-1])
+row.names(onco_m_all_ht) <- merged_onco_all$Hugo_Symbol
+```
+
+```{r annot_complexHeatmap_all, echo=FALSE, message=FALSE, warning=FALSE}
+Mut_sig_cols_5 <- c(Mut_sig_cols, "#943503","#8d958f")
+names(Mut_sig_cols_5) <- c(names(Mut_sig_cols),"HRD","Other")
+
+Passage_cols <- brewer.pal(6,"OrRd")
+names(Passage_cols) <- c("Pt","F0","F1","F2","F3","F4")
+
+ha_top_all = HeatmapAnnotation(Histology = WES_ht_all$Histology,
+                               Passage = WES_ht_all$Passage_N,
+                               Model = anno_text(WES_ht_all$PDX, 
+                                                 rot=90,gp = gpar(fontsize=8)),
+                               `Mut/Mb` = anno_barplot(log10(WES_ht_all$TMB), 
+                                                       axis = TRUE, border = FALSE, 
+                                                       bar_width = 0.95, height = unit(2, "cm"),
+                                                       axis_param = list(gp = gpar(fontsize = 6),
+                                                                         at = log10(TMB_breaks), 
+                                                                         labels =TMB_breaks),
+                                                       gp = gpar(col = "#566573",
+                                                                 fill = "#566573")),
+                               col = list(Histology = Hist_cols, Passage = Passage_cols),
+                               show_annotation_name = TRUE,
+                               show_legend = FALSE,
+                               annotation_name_side = c("right","right","right","left"),
+                               annotation_name_rot = c(0,0, 0, 90),
+                               na_col = "#E9E9E9", gp = gpar(col = "white"),
+                               annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+ha_bottom_all = HeatmapAnnotation(MSI = WES_ht_all$msi_score,
+                              `CNA %` = WES_ht_all$CNV_perc_cat,
+                              `CNA seg.` = WES_ht_all$seg_number,
+                              `Mut. sig.` = WES_ht_all$Sig_name,
+                              show_annotation_name = TRUE,
+                              col = list(MSI = MSI_cols, `CNA %` = CNV_perc_cols, 
+                                         `CNA seg.` = CNV_seg_cols, `Mut. sig.` = Mut_sig_cols_5),
+                              na_col = "#E9E9E9",
+                              show_legend = FALSE, gp = gpar(col = "white"),
+                              annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"),
+                              annotation_height = unit(c(0.5,0.5,0.5), "cm")) # annotation_height not working
+
+# Legends!
+annot_leg_all <- list(
+  Legend(title = "Histology", labels = names(Hist_cols), 
+         legend_gp = gpar(fill = Hist_cols), 
+         labels_gp = gpar(fontsize = 8), 
+         title_gp = gpar(fontsize = 9), #, fontface = "bold"))
+         ncol  = 2),
+    Legend(labels = names(Passage_cols), 
+         legend_gp = gpar(fill = Passage_cols), 
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),# fontface = "bold"),
+         ncol  = 2),
+  Legend(title = "Somatic events", at = mut_order, labels = mut_labels, 
+         legend_gp = gpar(fill = mut_fills),
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),# fontface = "bold"),
+         ncol = 2),
+  Legend(title = "MSISensor", col_fun = MSI_cols, at = c(0, 3.5, 25), 
+         labels = MSI_names, labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),# fontface = "bold"),
+         direction = "horizontal"),
+  Legend(title = "Percent of genome with CNA", labels = CNV_labels, 
+         legend_gp = gpar(fill = CNV_perc_cols), 
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9)),# fontface = "bold")),
+  Legend(title = "Number of CNA segments", col_fun = CNV_seg_cols, 
+         at = c(0,20,40), labels = CNV_seg_names,
+         labels_gp = gpar(fontsize = 8),
+         title_gp = gpar(fontsize = 9),#, fontface = "bold"),
+        direction = "horizontal"),  
+  Legend(title = "Dominant Mutational Signature", labels = names(Mut_sig_cols_5), 
+         legend_gp = gpar(fill = Mut_sig_cols_5), 
+         labels_gp = gpar(fontsize = 8), 
+         title_gp = gpar(fontsize = 9),
+         ncol = 2)#, fontface = "bold"))
+)
+```
+
+```{r plot_complexHeatmap_all, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+ht_all <-oncoPrint(onco_m_all_ht, 
+               alter_fun = alter_fun,
+               col = mut_fills,
+               right_annotation = NULL,
+               show_heatmap_legend = FALSE,
+               column_order = colnames(onco_m_all_ht),
+               row_order = intersect(union(genes_TCGA_mut,genes_TCGA_cnv),
+                                     row.names(onco_m_all_ht)),
+               column_split = factor(WES_ht_all$TCGA,
+                                     levels = unique(WES_ht_all$TCGA)),
+               column_title_gp = gpar(fill = c("#36A7CC","#61CA73","#F4C94F","#C63B55"), 
+                                      col = "white", fontface = "bold",fontsize = 7.2, 
+                                      border = FALSE),
+               column_gap = unit(3, "mm"),
+               show_pct = F,
+               top_annotation = ha_top_all,
+               bottom_annotation = ha_bottom_all,
+               row_names_gp = gpar(fontface = "italic", fontsize = 5.5))
+
+draw(ht_all,annotation_legend_list = annot_leg_all)
+
+```
+
+
+## Comparison of PDX models and the matched primary cancer - MMRd models
+
+First comparing global copy number:
+
+```{r MMRd_purity}
+
+MMRd_purity <- maf_sp %>%
+  left_join(pdx_meta) %>%
+  filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")) %>%
+  mutate(VAF = as.numeric(T_Alt_Count)/(as.numeric(T_Ref_Count)+as.numeric(T_Alt_Count))*100) %>%
+  group_by(PDX,SampleLabel) %>%
+  summarise(purity = estimate_mode(VAF)*2) #x2 because tumour purity is 2 and most som. mutations are heterozygous
+
+```
+
+```{r plot_CNV_summary_MMRd}
+# Melt CNV data for plotting
+# PLOT PERCENT OF GENOMIC CNV and LOH
+# Plot CNV  #A8A8A8 #D9D9D9 original grey 
+melt(CNV_array_summary) %>%
+  filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")) %>%
+  mutate(Group = if_else(variable == "LOH","LOH","CNV")) %>%
+  mutate(SampleLabel = factor(SampleLabel, levels = SampleLabel_levels)) %>%
+  mutate(variable = factor(variable, levels = CN_levels_short)) %>%
+  ggplot(., aes(x = SampleLabel, y = value, fill= variable))+
+  geom_bar(position="stack",stat="identity") +
+  facet_grid(Group~PDX,scales="free_x",space="free") +
+  scale_fill_manual(breaks = CN_levels_short, 
+                    values = CN_levels_cols,
+                    labels = CN_levels_labels) +
+  labs(x = "Sample", y = "Percent") +
+  coord_cartesian(ylim = c(0, 100)) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        plot.title=element_text(hjust = 0.5, face = "bold"),
+        legend.spacing.x = unit(0.4, 'cm'),
+        axis.text.x= element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+```
+
+```{r plot_CNV_summary_MMRd_chrom, width = 8}
+#CN level order
+CN_levels=c("Hom Del","Copy 1","Copy 2","Copy 3-4","Copy 5-6","Copy >6")
+
+# Fixing up input for graphing 
+segments_plot_array <- CNV_array_seg_full %>%
+  mutate(CNt.groups = case_when(Copy %in% 0 ~ "Hom Del",
+                                Copy %in% 1 ~ "Copy 1",
+                                Copy %in% 2 ~ "Copy 2",
+                                Copy %in% c(3:4) ~ "Copy 3-4",
+                                Copy %in% c(5:6) ~ "Copy 5-6",
+                                Copy >6 ~ "Copy >6")) %>% #grouping CN by levels
+  mutate(LOH = case_when(Copy == Mallele ~ TRUE,
+                         Copy != Mallele ~ FALSE)) %>%
+  mutate(chromosome = as.integer(Chr)) %>%
+  mutate(chromosome = str_replace(chromosome,"23","X")) %>%
+  dplyr::rename(start = PosSNPstart, end = PosSNPend) %>%
+  left_join(array_meta,  by = "Tumor_Sample")  %>%
+  select(-SampleLabel) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample")) %>%
+  select(chromosome,start,end,CNt.groups,SampleLabel,PDX,LOH) %>% #subsetting required columns
+  filter(!chromosome %in% c(24:25)) %>% #remove Y chromosome 
+  mutate(CNt.groups = factor(CNt.groups, levels = CN_levels)) %>%
+  mutate(chromosome = factor(chromosome, levels=chr_levels)) 
+
+
+# Plot CN levels or LOH
+chrom_plot_CNV(segments_plot_array %>%
+                    filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")), 
+               MMRd_purity,
+               type="CNV", segment_size = 4.5, autosomal=TRUE)
+
+chrom_plot_CNV(segments_plot_array %>%
+                    filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")), 
+               MMRd_purity,
+                type="LOH", segment_size = 4.5, autosomal=TRUE)
+```
+
+
+```{r PDXvsPrimary_Mutations_all, message=FALSE, fig.width=7, fig.height=5}
+
+var_type_cols <- brewer.pal(5,"Set2")
+names(var_type_cols) <- c("TNP","DNP","INS","DEL","SNP")
+
+
+maf_sp %>%
+  left_join(pdx_meta) %>%
+  filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")) %>%
+  count(PDX,SampleLabel,Tumor_Sample_Barcode,Variant_Type) %>%
+  mutate(Variant_Type = factor(Variant_Type, levels = names(var_type_cols))) %>%
+  ggplot(.) +
+  geom_bar(aes(x = SampleLabel, y = n, fill = Variant_Type), stat = "identity") +
+  scale_fill_manual(values = var_type_cols) +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") + 
+  labs(y = "Mutation Count", x = "Sample", fill = "Variant Type") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+
+maf_sp %>%
+  left_join(pdx_meta) %>%
+  filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")) %>%
+  mutate(VAF = as.numeric(T_Alt_Count)/(as.numeric(T_Ref_Count)+as.numeric(T_Alt_Count))*100) %>%
+  ggplot(.)+
+  geom_density(aes(fill= SampleLabel,VAF),alpha=0.5)+
+  facet_grid(PDX~., scales = "free", space = "free") 
+
+
+```
+
+
+```{r PDXvsPrimary_Mutations_pileup_euler, warning=FALSE}
+
+pileup_WES %>%
+  ggplot(aes(x = SampleLabel)) +
+  geom_bar(position = "stack") +
+  facet_wrap(~PDX, scales = "free")
+
+for (i in unique(pileup_WES$PDX)){
+  pileup_select <- pileup_WES %>%
+    filter(PDX == i) %>%
+    select(SnpId, SampleLabel) %>%
+    mutate(SampleLabel = factor(SampleLabel , levels=euler_cols$SampleLabel))
+
+  pileup_summary <- pileup_select %>%
+    group_by(SnpId) %>%
+    summarise(overlap=paste(SampleLabel, collapse="&")) %>%
+    count(overlap) %>%
+    mutate(overlap_len = str_length(overlap)) %>%
+    arrange(-overlap_len) %>%
+    mutate(n_samples = as.character(str_count(overlap,",")+1)) %>%
+    mutate(perc = round(n/sum(n)*100,1)) %>%
+    left_join(euler_cols %>% rownames_to_column(var="order"), 
+              by = c("overlap" = "SampleLabel")) %>%
+    arrange(as.numeric(order))
+  
+
+  
+  p1 <-plot(euler(setNames(pileup_summary$n, pileup_summary$overlap), #Define named vector
+             shape = "ellipse"), 
+       quantities = TRUE,
+       fills =na.omit(pileup_summary$Col),
+
+       edges = list(lty = 3, col = "darkgrey"),
+       main = i)
+  
+  fill_cols <- euler_cols %>%
+    filter(SampleLabel %in% pileup_select$SampleLabel) %>%
+    pull(Col)
+
+  legend <- ggplot(pileup_select) +
+  geom_bar(aes(x=1, fill = SampleLabel)) +
+  scale_fill_manual(values=fill_cols,
+                    name="") +
+  theme(legend.justification = "top", 
+        legend.key.size = unit(0.8, "cm"),
+        legend.text = element_text(size=10))
+
+  print(cowplot::plot_grid(p1,cowplot::get_legend(legend),rel_widths = c(3, 0.4)))
+
+  rm(p1,legend,pileup_select, pileup_summary, i)
+}
+
+```
+
+```{r PDXvsPrimary_Mutations_pileup_percent, eval=FALSE}
+
+pileup_summary <- pileup_WES %>%
+  select(SnpId, SampleLabel, PDX,Passage_N) %>%
+  group_by(PDX, SnpId) %>%
+  mutate(Passage_N = na_if(Passage_N, "Pt")) %>%
+  mutate(Passage_N = as.numeric(str_remove(Passage_N, "F"))) %>%
+  summarise(overlap=paste(SampleLabel, collapse="&"), 
+            min_passage = min(Passage_N, na.rm = TRUE),
+            ) %>%
+  count(overlap,min_passage) %>%
+  mutate(n_samples = (str_count(overlap,"&")+1)) %>%    
+  mutate(max_samples = max(n_samples)) %>%
+  mutate(perc = round(n/sum(n)*100,1)) %>%
+  mutate(group = case_when(n_samples == max_samples ~ "All samples",
+                           str_detect(overlap,"Pt") & n_samples == 1 ~ "Patient only",
+                           str_detect(overlap,"Pt") ~ "Patient & some PDX samples",
+                           !str_detect(overlap,"Pt") ~ paste(n_samples,"PDX"))) 
+
+pileup_summary_grouped <- pileup_summary %>%
+    group_by(PDX, group) %>%
+    summarise(perc = sum(perc),
+              n = sum(n), 
+              n_samples = max(n_samples),
+              max_samples = unique(max_samples))
+
+
+pileup_summary_grouped %>%
+  ungroup() %>%
+  mutate(group = factor(group, levels = c("1 PDX", "2 PDX", "3 PDX", "4 PDX", 
+                                          "Patient only", "Patient & some PDX samples", 
+                                          "All samples"))) %>%
+  filter(PDX %in% c("PDX12","PDX52","PDX58","PDX59")) %>%
+  ggplot(aes(y=perc, x=PDX, fill = group)) +
+  geom_bar(position = "stack", stat= "identity")
+
+pileup_summary %>%
+  filter(PDX %in% c("PDX59")) %>%
+  mutate(group = case_when(str_detect(overlap,"Pt&")~ "Pt& PDX",
+                           overlap =="Pt" ~ "Pt only",
+                           str_detect(overlap,"A") & str_detect(overlap,"B") ~ "PDX lin. A & B",
+                           TRUE ~ "PDX 1 lin.")) %>%
+  ggplot(aes(y=perc, x=PDX, fill = group)) +
+  geom_bar(position = "stack", stat= "identity")
+
+pileup_summary_mod <-  pileup_summary %>%
+  mutate(min_passage = case_when (min_passage %in% c(0:1) ~ "0-1",
+                                  min_passage %in% c(2:4) ~ "2-4")) %>%
+  mutate(group = case_when(!str_detect(group,"All|Patient")~ paste0("PDX F",min_passage),
+                           str_detect(group, "Patient &") ~ paste0("Patient & PDX F",min_passage),
+                           TRUE ~ group)) 
+
+
+p1 <- pileup_summary_mod %>%
+  ungroup() %>%
+  group_by(PDX,group) %>%
+  summarise(perc = sum(perc)) %>%
+  mutate(Category = if_else(PDX %in% c("PDX12","PDX52","PDX58","PDX59"),"Patient","PDX")) %>%
+  #filter(Category == "Patient") %>%
+  ggplot(aes(y=perc, x=PDX, fill = forcats::fct_rev(group))) +
+  scale_fill_brewer(palette = "BuPu") + 
+  geom_bar(position = "stack", stat= "identity") + 
+  labs(fill = "SNV overlap", y = "Percentage") +
+  facet_wrap(~Category,nrow=1, scales = "free_x") + 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        legend.justification = c(0,1))
+
+
+p2 <- pdx_meta %>%
+  filter(!PDX %in% c("PDX03","PDX49","PDX56")) %>%
+  count(PDX, Passage_N) %>%
+  spread(key = Passage_N, value = n)  %>%
+  gather(key = Passage_N, value = n, -PDX) %>%
+  mutate(Category = if_else(PDX %in% c("PDX12","PDX52","PDX58","PDX59"),"Patient","PDX")) %>%
+  mutate(Passage_N = factor(Passage_N, levels = rev(c("Pt","F0","F1","F2","F3","F4")))) %>%
+  #filter(Category == "Patient") %>%
+  ggplot(aes(x=PDX, y = Passage_N, fill = as.character(n))) +
+  scale_fill_manual(values = c("1"="#787878","2"="#404040"), na.value= "white", breaks = 1:2) + 
+  geom_tile() +
+  theme_minimal() +
+  labs(fill = "N of samples", y = "") +
+  facet_wrap(~Category,nrow=1,, scales = "free_x") + 
+  theme(panel.grid = element_blank(),
+        legend.justification = c(0,1),
+        strip.text = element_blank())
+
+cowplot::plot_grid(p1,p2, ncol=1,align = "hv", axis = 'lr', rel_heights = c(0.7,0.3))
+
+```
+
+
+```{r WES_pyclone_clusters, message=FALSE, fig.height = 6,fig.width = 5}
+give.n <- function(x) return(c(y = max(x)+0.2, label = length(x))) 
+
+
+filenames <- list.files(path="data/processed/pyclone/wes",
+                     full.names = T,
+                     pattern = "_loci.tsv$",
+                     recursive = F)
+
+for (i in filenames){
+  model = str_remove(basename(i), "_loci.tsv")
+  loci_input<-read.table(i,fill=T,header=T) %>% 
+    mutate(sample_id = str_remove(sample_id, "_pyclone"))
+  
+  cluster_input<-read.table(str_replace(i,"loci.tsv","cluster.tsv"),fill=T,header=T) %>% 
+    mutate(sample_id = str_remove(sample_id, "_pyclone"))
+  if(model == "PD058") {
+    top_5_clusters <- cluster_input %>%
+      select(cluster_id, size) %>%
+      distinct() %>%
+      filter(size >= 0.05*sum(size)) %>% # filter clusters that contributed >= 5% of mutations
+      top_n(5,size) %>%
+      arrange(-size) %>%
+      mutate(cluster = case_when(cluster_id == "5" ~ "1",
+                                 cluster_id == "4" ~ "2",
+                                 cluster_id == "0" ~ "3")) %>%
+      arrange(cluster)
+  } else {
+    top_5_clusters <- cluster_input %>%
+      select(cluster_id, size) %>%
+      distinct() %>%
+      filter(size >= 0.05*sum(size)) %>% # filter clusters that contributed >= 5% of mutations
+      top_n(5,size) %>%
+      arrange(-size) %>%
+      mutate(cluster = paste(" ",row_number()))
+  }
+  
+  loci_subset <- loci_input %>%
+    mutate(Tumor_Sample_Barcode = str_replace(sample_id,"-","_")) %>%
+    left_join(pdx_meta) %>%
+    arrange(cluster_id) %>%
+    right_join(top_5_clusters)
+  
+  print(ggplot(loci_subset,aes(x=cluster,group = cluster,y=cellular_prevalence,fill=cluster,colour=cluster)) +
+          scale_fill_manual(values = c( "#EABE94","#89c5b3", "#0B775E", "#445e9a", "#f56047")) + 
+          scale_color_manual(values = c( "#EABE94","#89c5b3", "#0B775E", "#445e9a", "#f56047")) + 
+          geom_boxplot(alpha=0.7)+
+          facet_grid(SampleLabel~.,scales="free_x",space="free_x") +
+          stat_summary(fun.data = give.n, geom = "text", fun.y = median, show.legend = F)+
+          scale_y_continuous(labels=scales::percent,limits=c(0,1.3)) +
+          labs(y="Cellular prevalence",legend="Clusters", title = model) +
+          theme(legend.position="bottom", 
+          strip.text.y = element_text(size = 7)))
+}
+```
+
+
+
+## Comparison of PDX models and the matched primary cancer - carcinosarcomas WGS
+```{r WGS_PDXvsPrimary_Mutations_all, message=FALSE,fig.width=7, fig.height=5}
+maf_sp %>%
+  left_join(pdx_meta) %>%
+  filter(Assay == "WGS") %>%
+  count(PDX,SampleLabel,Tumor_Sample_Barcode,Variant_Type) %>%
+  mutate(Variant_Type = factor(Variant_Type, levels = names(var_type_cols))) %>%
+  ggplot(.) +
+  geom_bar(aes(x = SampleLabel, y = n, fill = Variant_Type), stat = "identity") +
+  scale_fill_manual(values = var_type_cols) +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") + 
+  labs(y = "Mutation Count", x = "Sample", fill = "Variant Type") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+```
+
+
+```{r WGS_PDXvsPrimary_Mutations_pileup_euler, warning=FALSE}
+
+
+set.seed(1)
+for (i in unique(pileup_WGS$PDX)){
+  pileup_select <- pileup_WGS %>%
+    filter(PDX == i) %>%
+    select(SnpId, SampleLabel) %>%
+    mutate(SampleLabel = factor(SampleLabel , levels=euler_cols$SampleLabel))
+
+  pileup_summary <- pileup_select %>%
+    group_by(SnpId) %>%
+    summarise(overlap=paste(SampleLabel, collapse="&")) %>%
+    count(overlap) %>%
+    mutate(overlap_len = str_length(overlap)) %>%
+    mutate(n_samples = as.character(str_count(overlap,",")+1)) %>%
+    mutate(perc = round(n/sum(n)*100,1)) %>%
+    left_join(euler_cols %>% rownames_to_column(var="order"), 
+              by = c("overlap" = "SampleLabel")) %>%
+    arrange(order)
+  
+
+
+  p1 <- plot(euler(setNames(pileup_summary$n, pileup_summary$overlap), #Define named vector
+             shape = "ellipse"), 
+       quantities = TRUE,
+       fills =na.omit(pileup_summary$Col),
+       edges = list(lty = 3, col = "darkgrey"),
+       main = i)
+  
+  fill_cols <- euler_cols %>%
+    filter(SampleLabel %in% pileup_select$SampleLabel) %>%
+    pull(Col)
+  
+  legend <- ggplot(pileup_select) +
+    geom_bar(aes(x=1, fill = SampleLabel)) +
+    scale_fill_manual(values=fill_cols,
+                      name="") +
+    theme(legend.justification = "top", 
+          legend.key.size = unit(0.8, "cm"),
+          legend.text = element_text(size=10))
+  
+  print(cowplot::plot_grid(p1,cowplot::get_legend(legend),rel_widths = c(3, 0.4)))
+  
+  rm(p1,legend,pileup_select, pileup_summary, i)
+
+
+}
+
+```
+
+Only selecting clusters with >=5% of mutations, max top 5 clusters here because otherwise clonevol won't work
+```{r WGS_PDXvsPrimary_WGS_clonevol, message=FALSE, fig.height = 6,fig.width = 5}
+give.n <- function(x) return(c(y = max(x)+0.2, label = length(x))) 
+
+
+filenames=list.files(path="data/processed/pyclone",
+                     full.names = T,
+                     pattern = "_loci.tsv$",
+                     recursive = F)
+
+for (i in filenames){
+  model = str_remove(basename(i), "_loci.tsv")
+  loci_input<-read.table(i,fill=T,header=T) %>% 
+    mutate(sample_id = str_remove(sample_id, "_pyclone"))
+  
+  cluster_input<-read.table(str_replace(i,"loci.tsv","cluster.tsv"),fill=T,header=T) %>% 
+    mutate(sample_id = str_remove(sample_id, "_pyclone"))
+  
+  top_5_clusters <- cluster_input %>%
+    select(cluster_id, size) %>%
+    distinct() %>%
+    filter(size >= 0.05*sum(size)) %>% # filter clusters that contributed >= 5% of mutations
+    top_n(5,size) %>%
+    arrange(-size) %>%
+    mutate(cluster = paste(" ",row_number()))
+  
+  loci_subset <- loci_input %>%
+    mutate(Tumor_Sample_Barcode = sample_id) %>%
+    left_join(pdx_meta) %>%
+  arrange(cluster_id) %>%
+  right_join(top_5_clusters)
+                                 
+  print(ggplot(loci_subset,aes(x=cluster,group = cluster,y=cellular_prevalence,fill=cluster,colour=cluster)) +
+    scale_fill_manual(values = c( "#EABE94","#89c5b3", "#0B775E", "#445e9a", "#f56047")) + 
+    scale_color_manual(values = c( "#EABE94","#89c5b3", "#0B775E", "#445e9a", "#f56047")) + 
+    geom_boxplot(alpha=0.7)+
+    facet_grid(SampleLabel~.,scales="free_x",space="free_x") +
+    stat_summary(fun.data = give.n, geom = "text", fun.y = median, show.legend = F)+
+    scale_y_continuous(labels=scales::percent,limits=c(0,1.3)) +
+    labs(y="Cellular prevalence",legend="Clusters", title = model) +
+    theme(legend.position="bottom", 
+          strip.text.y = element_text(size = 7)))
+  
+  # ClonEvol not working on the cluster. Ran on local computer (seems to be the same version and everything)
+ #  x <- loci_input %>%
+ #    mutate(sample_id = str_replace(sample_id, "_", ":")) %>%
+ #    separate(sample_id, c("PDX","sample"), sep = ":") %>%
+ #    select(mutation_id,sample, cluster_id, cellular_prevalence) %>%
+ #    mutate(sample = if_else(grepl("T",sample), "T",sample)) %>%
+ #    arrange(cluster_id) %>%
+ #    right_join(top_5_clusters) %>%
+ #    mutate(cellular_prevalence = cellular_prevalence *100)
+ #  
+ # # shorten vaf column names as they will be
+ #  sample.names <- unique(x$sample)
+ #  vaf.col.names <- sample.names
+ #  
+ #  # Spread the data by sample
+ #  x <- x %>%  spread(key = sample, value = cellular_prevalence)
+ #  
+ #  
+ #  clone.colors <- c("#89c5b3", "#EABE94", "#0B775E", "#445e9a", "#f56047") #Rushmore1 edited
+ # 
+ #  # Infering clonal evolution trees
+ #  y = infer.clonal.models(variants = x,
+ #                          vaf.col.names = vaf.col.names,
+ #                          cancer.initiation.model='monoclonal',
+ #                          subclonal.test = 'bootstrap',
+ #                          subclonal.test.model = 'non-parametric',
+ #                          num.boots = 1000,
+ #                          founding.cluster = 1,
+ #                          cluster.center = 'mean',
+ #                          ignore.clusters = NULL,
+ #                          random.seed = 1,
+ #                          clone.colors = clone.colors,
+ #                          min.cluster.vaf = 0.01,
+ #                          # min probability that CCF(clone) is non-negative
+ #                          sum.p = 0.05,
+ #                          # alpha level in confidence interval estimate for CCF(clone)
+ #                          alpha = 0.05)
+ #  
+ #  y <- convert.consensus.tree.clone.to.branch(y, branch.scale = 'sqrt')
+ #  
+ #  plot.clonal.models(y,
+ #                     # box plot parameters
+ #                     box.plot = FALSE,
+ #                     # bell plot parameters
+ #                     clone.shape = 'bell',
+ #                     bell.event = FALSE,
+ #                     clone.time.step.scale = 1,
+ #                     bell.curve.step = 2,
+ #                     # node-based consensus tree parameters
+ #                     merged.tree.plot = FALSE,
+ #                     merged.tree.clone.as.branch = TRUE,
+ #                     mtcab.event.sep.char = ',',
+ #                     mtcab.branch.text.size = 0.5,
+ #                     mtcab.branch.width = 2.5,
+ #                     mtcab.node.size = 6,
+ #                     mtcab.node.label.size = 1,
+ #                     mtcab.node.text.size = 0.5,
+ #                     # cellular population parameters
+ #                     cell.plot = TRUE,
+ #                     num.cells = 100,
+ #                     cell.border.size = 0.2,
+ #                     cell.border.color = 'black',
+ #                     clone.grouping = 'horizontal',
+ #                     #meta-parameters
+ #                     scale.monoclonal.cell.frac = TRUE,
+ #                     show.score = FALSE,
+ #                     cell.frac.ci = FALSE,
+ #                     disable.cell.frac = FALSE,
+ #                     # output figure parameters
+ #                     out.dir = 'figures',
+ #                     out.format = 'pdf',
+ #                     out.prefix = model,
+ #                     overwrite.output = TRUE,
+ #                     width = 5,
+ #                     height = 4,
+ #                     # vector of width scales for each panel from left to right
+ #                     panel.widths = c(5,2.2,3))
+}
+
+```
+
+
+```{r WGS_CNV_by_chrom, width = 8}
+# Fixing up input for graphing 
+segments_plot_WGS <- CNV_WGS %>%
+  mutate(CNt.groups = case_when(tumour.total.cn %in% 0 ~ "Hom Del",
+                                tumour.total.cn %in% 1 ~ "Copy 1",
+                                tumour.total.cn %in% 2 ~ "Copy 2",
+                                tumour.total.cn %in% c(3:4) ~ "Copy 3-4",
+                                tumour.total.cn %in% c(5:6) ~ "Copy 5-6",
+                                tumour.total.cn >6 ~ "Copy >6")) %>% #grouping CN by levels\
+  left_join(pdx_meta) %>%
+  select(chromosome,start,end,CNt.groups,SampleLabel,PDX,LOH) %>% #subsetting required columns
+  filter(!chromosome %in% c("X","Y")) %>% #remove Y chromosome 
+  mutate(CNt.groups = factor(CNt.groups, levels = CN_levels)) %>%
+  mutate(chromosome = factor(chromosome, levels=chr_levels)) 
+
+WGS_purity <- CNV_WGS_summary_stats %>%
+  left_join(pdx_meta) %>%
+  select(SampleLabel, PDX, purity) %>%
+  mutate(purity = purity *100)
+
+
+chrom_plot_CNV(segments_plot_WGS,WGS_purity, type="CNV")
+chrom_plot_CNV(segments_plot_WGS,WGS_purity, type="LOH")
+
+```
+
+```{r WGS_CNV_summary, message=FALSE}
+
+# PLOT PERCENT OF GENOMIC CNV and LOH
+ggplot(CNV_WGS_summary,aes(x = SampleLabel, y = value, fill= variable))+
+  geom_bar(position="stack",stat="identity") +
+  facet_grid(Group~PDX,scales="free_x",space="free") +
+  scale_fill_manual(breaks = CN_levels_short, 
+                    values = CN_levels_cols,
+                    labels = CN_levels_labels) +
+  labs(x = "Sample", y = "Percent") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        plot.title=element_text(hjust = 0.5, face = "bold"),
+        legend.spacing.x = unit(0.4, 'cm'),
+        axis.text.x= element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+```
+
+
+```{r WGS_PDXvsprimary_SV_events}
+
+qsv %>%  
+  left_join(pdx_meta) %>%
+  ggplot()+
+  geom_bar(aes(x = SampleLabel, fill = type), position="stack") +
+   scale_fill_brewer(palette = "Dark2") +
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") + 
+  labs(y = "SV Count", x = "Sample", fill = "Variant Type") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1,vjust=0.5))
+  
+
+```
+
+
+
+## HRD assessment in PDX models 
+
+Only using variants with allele frequency over 30%. Enriched set at >70% VAF. Used VEP annotated germline and somatic variant lists, then filtered truncating variants and/or ClinVar pathogenic/likely pathogenic.
+
+Only somatic mutations were detected, so proceeding with just somatic from this point on.
+Also only including WGS data for PDX03, PDX49 and PDX56 
+```{r HRD_analysis_mutation }
+onco_BROCA <- maf_som_filt %>%
+  left_join(pdx_meta) %>%
+  filter((PDX %in% c("PDX03","PDX49","PDX56") & Assay == "WGS") | 
+           (!PDX %in% c("PDX03","PDX49","PDX56") & Assay == "WES")) %>%
+  mutate(Start_Position  = as.integer(Start_Position)) %>%
+  right_join(BROCA_vep_trunc_path) %>%
+  filter(i_TumorVAF_WU > 30) %>% # Filter out subclonal variants
+  mutate(Alt_Allele = ifelse(Tumor_Seq_Allele1==Reference_Allele,
+                             Tumor_Seq_Allele2,Tumor_Seq_Allele1)) %>%
+  select(PDX, Type, Tumor_Sample_Barcode, Chromosome, 
+         Start_Position, End_Position, Reference_Allele,
+         Alt_Allele, Hugo_Symbol,
+         Transcript_ID, Variant_Classification, 
+         CDS_Change, Protein_Change, i_TumorVAF_WU)
+
+onco_BROCA %>%
+  write_tsv("tables/20200624_BROCA_somatic_mutations_complexheatmap.tsv")
+
+temp_mat <- onco_BROCA %>%
+  mutate(Mut_Type = case_when(str_detect(Variant_Classification,"Frame_Shift") ~ "FS",
+                              str_detect(Variant_Classification,"Missense") ~ "MUT",
+                              str_detect(Variant_Classification,"Nonsense") ~ "NS",
+                              str_detect(Variant_Classification,"Splice") ~ "SPLICE",
+                              TRUE ~ "INDEL")) %>%
+  group_by(Tumor_Sample_Barcode,Hugo_Symbol) %>%
+  summarise(Mut_Type_merged = paste(Mut_Type, collapse = ";")) %>%
+  mutate(Mut_Type_merged = if_else(grepl(";",Mut_Type_merged),"MULTI",Mut_Type_merged))
+
+onco_BROCA %<>%
+  group_by(Tumor_Sample_Barcode,Hugo_Symbol) %>%
+  mutate(Enriched = ifelse( i_TumorVAF_WU >70, "ENRICHED",NA)) %>%
+  filter(Enriched == "ENRICHED") %>%
+  summarise(Mut_Type_merged = paste(Enriched, collapse = ";")) %>%
+  full_join(temp_mat) %>%
+  group_by(Tumor_Sample_Barcode,Hugo_Symbol) %>%
+  summarise(Mut_Type_merged = paste(Mut_Type_merged, collapse = ";"))%>%
+  spread(key = Tumor_Sample_Barcode, value = Mut_Type_merged)
+
+remove(temp_mat)
+```
+
+```{r HRD_analysis_CNV }
+
+temp_mat_CNV <- CNV_WGS_genes %>%
+  left_join(CNV_WGS_summary_stats %>% 
+              select(ploidy, Tumor_Sample_Barcode)) %>%
+  filter(Copynumber >= round(ploidy) + 3 | Copynumber < 1 | ASCAT_call == "cnLOH") %>%
+  filter(gene_symbol %in% c(genes_BROCA$X1,"ARID1A","PTEN")) %>%
+  mutate(CNV = case_when(ASCAT_call == "cnLOH" ~ "LOH", 
+                         Copynumber >= round(ploidy)+3 ~ "AMP",
+                         Copynumber >= round(ploidy)+ 1 ~ "GAIN",
+                         Copynumber <1 ~ "HOMDEL",
+                         TRUE ~ "DEL")) %>%
+  select(Tumor_Sample_Barcode,gene_symbol,CNV) %>%
+  dplyr::rename(Hugo_Symbol = gene_symbol) %>%
+  distinct()%>%
+  group_by(Tumor_Sample_Barcode,Hugo_Symbol) %>%
+  summarise(CNV = paste(CNV, collapse = ";"))
+
+onco_BROCA_CNV <- CNV_array_gene %>%
+  left_join(array_meta, by = c("Tumor_Sample" = "Tumor_Sample")) %>%
+  left_join(pdx_meta, by = c("SeqSampleLabel" = "Sample")) %>%
+  filter(Arrays_to_analyse == 1 ) %>%
+  filter(Symbol %in% c(genes_BROCA$X1,"ARID1A","PTEN")) %>%
+  left_join(array_summary_stats %>%
+              select(Ploidy,Tumor_Sample)) %>%
+  filter(Copynumber >= round(Ploidy)+ 1 | Copynumber < 2 | GAP_call == "cnLOH") %>% 
+  mutate(CNV = case_when(GAP_call == "cnLOH" ~ "LOH", 
+                         Copynumber >= round(Ploidy)+3 ~ "AMP",
+                         Copynumber >= round(Ploidy)+ 1 ~ "GAIN",
+                         Copynumber <1 ~ "HOMDEL",
+                         TRUE ~ "DEL")) %>%
+  select(Tumor_Sample_Barcode,Symbol,CNV) %>%
+  dplyr::rename(Hugo_Symbol = Symbol) %>%
+  distinct()%>%
+  full_join(temp_mat_CNV) %>%
+  group_by(Tumor_Sample_Barcode,Hugo_Symbol) %>%
+  filter(!CNV %in% c("GAIN","AMP")) %>%
+  summarise(CNV = paste(CNV, collapse = ";")) %>%
+  spread(key = Tumor_Sample_Barcode, value = CNV)
+
+remove(temp_mat_CNV)
+```
+
+```{r HRD_analysis_qSV }
+onco_BROCA_qsv <- qsv %>%
+  filter(bkpt_from_context != "intergenic" & bkpt_to_context != "intergenic") %>%
+  filter(gene_name_from %in% c(genes_BROCA$X1,"ARID1A","PTEN") | 
+           gene_name_to %in% c(genes_BROCA$X1,"ARID1A","PTEN")) %>%
+  # Manually annotating variants - after manual inspection
+  mutate(SV = case_when(grepl("^CAGATCAGGGTAA",chr_to_flanking_seq) ~ "HETDELSV",
+                        grepl("^ACCCTTGGATTT",chr_to_flanking_seq) ~ "HETDELSV",
+                        grepl("^TAATATATATTATATA",chr_to_flanking_seq) ~ "Subclonal del",
+                        grepl("^CCACAGGCACCC",chr_to_flanking_seq) ~ "HETFUSION",
+                        grepl("^TTCTTCATACC",chr_to_flanking_seq) ~ "HOMDELSV")) %>%
+  mutate(Manual_annotation = case_when(grepl("^CAGATCAGGGTAA",chr_to_flanking_seq) ~ "deletion ex5-6 het",
+                        grepl("^ACCCTTGGATTT",chr_to_flanking_seq) ~ "dup ex7-8  het",
+                        grepl("^TAATATATATTATATA",chr_to_flanking_seq) ~ "del ex3-6 subclonal (limited evidence in all three samples)",
+                        grepl("^CCACAGGCACCC",chr_to_flanking_seq) ~ "?fusion - het",
+                        grepl("^TTCTTCATACC",chr_to_flanking_seq) ~ "ex2-ex8 homozygous")) %>%
+  filter(SV != "Subclonal del") %>%
+  mutate(Hugo_Symbol = if_else(gene_name_from == gene_name_to, gene_name_from, possible_fusion)) %>%
+  select(Tumor_Sample_Barcode, Hugo_Symbol, SV) %>%
+  spread(key = Tumor_Sample_Barcode, value = SV)
+
+```
+
+
+```{r HRD_analysis_SV-signatures}
+sv_signatures %>%
+  ggplot(.) +
+  geom_bar(aes(x=SampleLabel,y=Frequency,fill=Signature_Description),
+           stat="identity") +
+  labs(y="Proportion (%)",x="Sample", 
+       fill="Signature - aetiology\n (Sig. ID de novo)") +
+  facet_grid(.~PDX,scales="free_x",space="free")+
+  theme(axis.text.x=element_text(angle=90,hjust=1, vjust = 0.5),
+        plot.title=element_text(hjust=0.5))
+
+
+```
+
+```{r HRD_analysis_scarHRD, message=FALSE, warning=FALSE}
+
+CNV_WGS %>%
+  left_join(CNV_WGS_summary_stats) %>%
+  mutate(SampleID = paste0(Tumor_Sample_Barcode,"_WGS"),
+         Chromosome = paste("chr",chromosome,sep=""),
+         Start_position = start, End_position = end,
+         total_cn = tumour.total.cn, A_cn = tumour.minor.cn, B_cn = tumour.major.cn) %>%
+  select(SampleID, Chromosome, Start_position, End_position,
+         total_cn, A_cn, B_cn, ploidy) %>%
+  group_by(SampleID) %>%
+  group_walk(~ {
+    write_tsv(.x, paste0("data/processed/scarHRD/",.y$SampleID, ".scarHRD.input.txt"))
+    scar_score(paste0("data/processed/scarHRD/",.y$SampleID, ".scarHRD.input.txt"),
+               reference = "grch37" ,seqz = FALSE, outputdir = "data/processed/scarHRD/")
+    }, keep = TRUE)
+  
+
+scarHRD_summary <- list.files(path="data/processed/scarHRD",
+                            pattern = "_WGS_HRDresults.txt$",
+                            full.names = T,
+                            recursive = F) %>%
+  map_dfr(~read_tsv(.,col_types = cols()))  %>%
+  mutate(Tumor_Sample_Barcode = str_remove(X1,"_WGS")) %>%
+  select(-X1)  
+
+```
+
+
+```{r HRD_analysis_scarHRD_array, message=FALSE, warning=FALSE}
+
+CNV_array_seg_full %>%
+  left_join(array_summary_stats) %>%
+  left_join(array_meta, by = c("Tumor_Sample" = "Tumor_Sample")) %>%
+  filter(Arrays_to_analyse  %in% 1:2) %>%
+  filter(!Exclude_choppy) %>%
+  mutate(SampleID = paste0(Model,"_",SeqSampleLabel,"_array"), 
+         Chromosome = paste0("chr",as.integer(Chr)), ploidy = Ploidy,
+         Start_position = PosSNPstart, End_position = PosSNPend,
+         total_cn = Copy, A_cn = Mallele, B_cn = Copy-Mallele) %>%
+  filter(!Chromosome %in% c("chr24","chr25")) %>%
+  mutate(Chromosome = if_else(Chromosome == "chr23", "chrX", Chromosome)) %>%
+  select(SampleID, Chromosome, Start_position, End_position,
+         total_cn, A_cn, B_cn, ploidy) %>%
+  group_by(SampleID) %>%
+  group_walk(~ {
+    write_tsv(.x, paste0("data/processed/scarHRD/",.y$SampleID, ".scarHRD.input.txt"))
+    scar_score(paste0("data/processed/scarHRD/",.y$SampleID, ".scarHRD.input.txt"),
+               reference = "grch37" ,seqz = FALSE, outputdir = "data/processed/scarHRD/")
+    }, keep = TRUE)
+
+
+scarHRD_summary_array <- list.files(path="data/processed/scarHRD",
+                                       pattern = "_array_HRDresults.txt$",
+                                       full.names = T,
+                                       recursive = F) %>%
+  map_dfr(~read_tsv(.,col_types = cols()))  %>%
+  mutate(Tumor_Sample_Barcode = str_remove(X1,"_array")) %>%
+  select(-X1) 
+
+# Combine with the other scarHRD summary (WGS samples)
+scarHRD_summary %<>% bind_rows(scarHRD_summary_array) %>% distinct()
+
+
+scarHRD_summary  %>%
+  left_join(pdx_meta) %>%
+  ggplot(.) +
+  geom_bar(aes(x=SampleLabel,y=`HRD-sum`), stat = "identity", position = "dodge")+
+  geom_hline(yintercept = 42, linetype = "dashed") +
+  ylim(0,100)+
+  facet_grid(.~PDX, scales = "free_x", space = "free_x") +
+  theme(strip.text.x = element_text(angle = 90),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+```
+
+
+### HRdetect for WGS samples
+
+Microhomology data was precalculated using Eric Zhao's scripts (https://github.com/eyzhao/hrdetect-pipeline) - Zhao, Eric Y., et al. "Homologous recombination deficiency and platinum-based therapy outcomes in advanced breast cancer." Clinical Cancer Research 23.24 (2017): 7521-7530.   
+Run YAPSA to assign RS (SV) signatures. 
+
+```{r SV_sig_assignment_PDX}
+
+sv_total_counts <- sv_counts %>%
+  gather(key = "Tumor_Sample_Barcode", value = "N") %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  summarise(Total_count = sum(N))
+
+sv_sig_raw <- LCD(
+  in_mutation_catalogue_df = sv_counts,
+  in_signatures_df = nikzainal_SV_sigs)
+
+sv_sig_assigned <- sv_sig_raw %>%
+  rownames_to_column("Sig") %>%
+  gather(key= Tumor_Sample_Barcode, value = count_raw, - Sig) %>%
+  left_join(sv_total_counts)  %>%
+  group_by(Tumor_Sample_Barcode) %>%
+  mutate(Count = count_raw/sum(count_raw)*Total_count) %>%
+  mutate(Perc = Count/Total_count*100) %>%
+  mutate(Count = if_else(Perc > 10, round(Count), 0)) %>%
+  mutate(Perc = if_else(Perc > 10, Perc, 0))  %>%
+  select(-Total_count, -count_raw)
+
+
+```
+
+First, clean up all the inputs for HRdetect input.
+
+```{r clean_up_hrdetect_input_PDX}
+
+snv_PDX_count <- maf_sp %>%
+  filter(Variant_Type == "SNP") %>%
+  count(Tumor_Sample_Barcode)
+
+
+hrdetect_input_PDX <- sig_PDX_cosmic_default %>%
+  left_join(snv_PDX_count, by=c("Sample" ="Tumor_Sample_Barcode")) %>%
+  mutate_at(vars(starts_with("Sig")),list(~.*n)) %>%
+  dplyr::rename(Tumor_Sample_Barcode=Sample) %>%
+  select(Tumor_Sample_Barcode, Sig3, Sig8) %>%
+  full_join(scarHRD_summary %>% select(Tumor_Sample_Barcode, `HRD-sum`)) %>%
+  full_join(microhom_PDX %>% select(Tumor_Sample_Barcode, deletion_microhomology_proportion)) %>%
+  full_join(sv_sig_assigned %>%
+              select(Tumor_Sample_Barcode, Count, Sig) %>%
+              mutate(Sig = str_replace(Sig, "Rearrangement Signature ","rs")) %>%
+              spread(key = Sig, value = Count) %>%
+              select(Tumor_Sample_Barcode, rs3,rs5)) %>%
+  select(Tumor_Sample_Barcode,Sig3,Sig8,rs3,rs5,`HRD-sum`,deletion_microhomology_proportion) %>%
+  drop_na() %>%
+  gather(key = feature, value = value, 
+         -Tumor_Sample_Barcode) %>%
+  mutate(feature = case_when(feature == "Sig3" ~ "sig3",
+                             feature == "Sig8" ~ "sig8",
+                             feature == "HRD-sum" ~ "hrd",
+                             feature == "deletion_microhomology_proportion" ~ "mhom",
+                             TRUE ~ feature))
+
+```
+
+Running HRdetect.  
+Adjustment values taken from supplementary data -  Davies, H., Glodzik, D., Morganella, S. et al. HRDetect is a predictor of BRCA1 and BRCA2 deficiency based on mutational signatures. Nat Med 23, 517??525 (2017). https://doi.org/10.1038/nm.4292
+
+```{r hrdetect_manual_PDX}
+
+
+
+hrdscore_output_PDX <- get_hrdetect_score(hrdetect_input_PDX,hrd_adj_val)
+
+hrdscore_output_PDX %>%
+  write_tsv("tables/hrdetect_PDX_WGS.tsv")
+```
+
+### Oncoprint summary - HRD in PDX
+
+```{r prep_HRD_analysis_Oncoprint }
+# Annotation for BROCA oncoprint
+BROCA_anno <- pdx_meta %>%
+  filter((PDX %in% c("PDX03","PDX49","PDX56") & Assay == "WGS") | 
+           (!PDX %in% c("PDX03","PDX49","PDX56") & Assay == "WES")) %>%
+  mutate(TCGA=case_when(PDX %in% c("PDX23","PDX03","PDX49","PDX56") ~ "CN-high/p53mut",
+                        PDX %in% c("PDX12","PDX52","PDX53","PDX58","PDX59") ~ "MMRd",
+                        PDX %in% c("PDX21") ~ "CN-low",
+                        PDX %in% c("PDX24") ~ "POLE")) %>%
+  mutate(TCGA = factor (TCGA, levels = c("POLE","CN-low","MMRd","CN-high/p53mut")))  %>%
+  mutate(Passage_N = factor(Passage_N, levels = c("Pt","F0","F1","F2","F3","F4"))) %>%
+  arrange(PDX,Passage_N) %>%
+  left_join(scarHRD_summary) %>%
+  left_join(sig3_prop) %>%
+  left_join(hrdscore_output_PDX %>% dplyr::rename(hrdetect=hrd_score)) %>%
+  replace_na(list(Proportion=0)) %>%
+  mutate(Proportion = Proportion*100)
+
+
+#Combine all BROCA oncoprint matrices 
+merged_onco_BROCA <- bind_rows(onco_BROCA, onco_BROCA_qsv,onco_BROCA_CNV) %>%
+  gather(var, val, -Hugo_Symbol, na.rm = TRUE) %>%
+  group_by(Hugo_Symbol, var) %>%
+  summarise(val=paste(val,collapse=';')) %>%
+  filter(val != "LOH") %>%
+  spread(var, val) %>%
+  filter_all(any_vars(!is.na(.)))
+
+#Adding samples without BROCA events
+merged_onco_BROCA[,BROCA_anno$Tumor_Sample_Barcode[!BROCA_anno$Tumor_Sample_Barcode %in% names(merged_onco_BROCA)]] = NA 
+#Arranging in the same order
+merged_onco_BROCA <- merged_onco_BROCA[,c("Hugo_Symbol",BROCA_anno$Tumor_Sample_Barcode)] 
+
+onco_m_ht_BROCA <- as.matrix(merged_onco_BROCA[,-1])
+row.names(onco_m_ht_BROCA) <- merged_onco_BROCA$Hugo_Symbol
+```
+
+```{r param_HRD_analysis_Oncoprint}
+# Oncoprint parameters 
+alter_fun = list(
+  background = function(x, y, w, h) 
+    grid.rect(x, y, w, h, gp = gpar(fill = "#ECEFF1", col = "white")),
+  MUT = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#CE93D8", col = "white")),
+  NS = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#90CAF9", col = "white")),
+  FS = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1, gp = gpar(fill = "#FFAB91", col = "white")),
+  MULTI = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#F48FB1", col = "white")),
+  SPLICE = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#80DEEA", col = "white")),
+  INDEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.2, "mm"), h*1,gp = gpar(fill = "#E6EE9C", col = "white")),
+  GAIN = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5, gp = gpar(fill = "#43A047", col = NA)),
+  AMP = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5, gp = gpar(fill = "#1B5E20", col = NA)),
+  DEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#D84315", col = NA)),
+  HOMDEL = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#750808", col = NA)),
+  HETFUSION = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#381AFF", col = NA)),
+  HETDELSV = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#2471a3", col = NA)),
+  HOMDELSV = function(x, y, w, h) 
+    grid.rect(x, y, w-unit(0.4, "mm"), h*0.5,gp = gpar(fill = "#0a398a", col = NA)),
+  LOH = function(x, y, w, h)
+    grid.rect(x, y, w, h, gp = gpar(fill = NA, lwd = 1)),
+  ENRICHED = function(x, y, w, h)
+    grid.points(x, y, pch = 8, size = unit(0.1, "cm"))
+)
+
+mut_fills = c("MUT" = "#CE93D8", "FS" = "#FFAB91", "SPLICE" = "#80DEEA", 
+              "INDEL" = "#E6EE9C", "NS" = "#90CAF9",
+              "MULTI" = "#F48FB1", "DEL" = "#D84315", 
+              "HOMDEL" = "#750808", "HETFUSION" = "#381AFF", 
+              "HETDELSV" = "#2471a3", "HOMDELSV" = "#0a398a" )
+mut_order = c("MUT","FS","SPLICE","INDEL","NS","MULTI",
+              "DEL", "HOMDEL", "HETFUSION", "HETDELSV", "HOMDELSV")
+mut_labels =c("Missense", "Frameshift", "Splice-site", "In-frame indel",
+              "Nonsense", "Multiple mutations","Deletion","Hom Deletion",
+              "Fusion","Deletion - qSV","Hom Deletion - qSV")
+
+Passage_cols <- brewer.pal(6,"OrRd")
+names(Passage_cols)= sort(unique(BROCA_anno$Passage_N))
+
+
+```
+
+```{r annot_HRD_analysis_Oncoprint}
+
+ha_top <- HeatmapAnnotation(Passage = BROCA_anno$Passage_N,
+                           col = list(Passage = Passage_cols),
+                           show_annotation_name = TRUE,
+                           na_col = "white",gp = gpar(col = "white"), show_legend = FALSE,
+                           annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"))
+
+
+
+ha_bottom = HeatmapAnnotation(`HRD sum` = anno_barplot(BROCA_anno$`HRD-sum`,
+                                                     axis = TRUE, border = FALSE, bar_width = 0.95,
+                                                     height = unit(2, "cm"),
+                                                     axis_param = list(gp = gpar(fontsize = 6)),
+                                                     gp = gpar(col = "#566573", fill = "#566573"),
+                                                     ylim = c(0,100)),
+                              `Sig. 3(%)` = anno_barplot(BROCA_anno$Proportion,
+                                                          axis = TRUE, border = FALSE, 
+                                                          bar_width = 0.95,
+                                                          height = unit(2, "cm"),
+                                                          axis_param = list(gp = gpar(fontsize = 6)),
+                                                          gp = gpar(col = "#566573", 
+                                                                    fill = "#566573"),
+                                                          ylim = c(0,100)),  
+                              `HRDetect score` = anno_barplot(BROCA_anno$hrdetect,
+                                                      axis = TRUE, border = FALSE, bar_width = 0.95,
+                                                      height = unit(2, "cm"),
+                                                      axis_param = list(gp = gpar(fontsize = 6)),
+                                                      gp = gpar(col = "#566573", fill = "#566573"),
+                                                      ylim = c(0,1)),
+                              show_annotation_name = TRUE,
+                              na_col = "#E9E9E9",
+                              show_legend = FALSE, gp = gpar(col = "white"),
+                              annotation_name_gp = gpar(fontsize = 8), gap = unit(0.5,"mm"),
+                              annotation_height = unit(c(1.5, 1.5, 1.5), "cm")) # annotation_height not working
+
+
+annot_leg <- list(
+  Legend(labels = names(Passage_cols), 
+         legend_gp = gpar(fill = Passage_cols), labels_gp = gpar(fontsize = 7),
+         title_gp = gpar(fontsize = 8, fontface = "bold")), ##, nrow=1
+  Legend(title = "Somatic events", at = mut_order, 
+         labels = mut_labels, legend_gp = gpar(fill = mut_fills), 
+         labels_gp = gpar(fontsize = 7),
+         title_gp = gpar(fontsize = 8, fontface = "bold")),
+  Legend(labels ="Enriched by VAF", type = "points", pch = 8, 
+         labels_gp = gpar(fontsize = 7)),
+  Legend(labels ="LOH region", legend_gp = gpar(fill ="#E9E9E9"),
+         border = "black", labels_gp = gpar(fontsize = 7))
+)
+
+```
+  
+```{r plot_HRD_analysis_Oncoprint}  
+ht <-oncoPrint(onco_m_ht_BROCA, 
+               alter_fun = alter_fun,
+               col = mut_fills,
+               right_annotation = NULL,
+               show_heatmap_legend = FALSE,
+               column_order = colnames(onco_m_ht_BROCA),
+               column_split = factor(BROCA_anno$PDX, levels = unique(BROCA_anno$PDX)),
+               column_title_gp = gpar(fontsize = 8),
+               column_gap = unit(3, "mm"),
+               show_pct = F,
+               top_annotation = ha_top,
+               bottom_annotation = ha_bottom,
+               row_names_gp = gpar(fontface = "italic", fontsize = 5.5))
+
+pdf("figures/plot_HRD_analysis_Oncoprint.pdf")
+draw(ht,annotation_legend_list = annot_leg)
+
+decorate_annotation("HRD sum",{
+  grid.lines(unit(c(0,23.7),"npc"), unit(c(42,42),"native"), gp = gpar(lty=2))
+})
+
+decorate_annotation("Sig. 3(%)",{
+  grid.lines(unit(c(0,23.7),"npc"), unit(c(25,25),"native"), gp = gpar(lty=2))
+})
+
+
+decorate_annotation("HRDetect score",{
+  grid.lines(unit(c(0,2.8),"npc"), unit(c(0.7,0.7),"native"), gp = gpar(lty=2))
+}, slice = 9)
+dev.off()
+
+```
+
+
+## Assess HRD status in public datasets
+  
+The de novo mutational signature assignment was performed using SigProfiler on MATLAB platform.  
+Six signatures were identified that were similar to six COSMIC signatures with various aetiologies.  
+Only samples with >=50 mutations are shown, as signature estimation for samples with less mutations is not reliable.  
+
+Detected de novo signatures:  
+```{r Public_WES_denovo_mut_sig_proportion }
+
+# Select predominant signature per sample
+sig_perc_max_pWES_dn <- sig_perc_melt_pWES_dn %>%
+  group_by(testDonorPublicationID) %>%
+  filter(Perc == max(Perc)) %>%
+  ungroup() %>%
+  dplyr::rename(Sig_max = Sig)
+
+sig_perc_melt_pWES_dn_1 <- sig_perc_melt_pWES_dn %>%
+  left_join(sig_perc_max_pWES_dn %>%
+              select(testDonorPublicationID,Sig_max)) %>%
+  mutate(Sig_max = factor(Sig_max, 
+                          levels = c("Sig_A","Sig_C","Sig_D","Sig_E","Sig_B","Sig_F"))) %>%
+  arrange(Sig_max) %>%
+  mutate(Sig_Cosmic = factor(Sig_Cosmic, levels = c("Sig 10 - POLE (Sig A)", 
+                                                    "Sig 20 - MSI (Sig C)",
+                                                    "Sig 26 - MSI (Sig D)", 
+                                                    "Sig 14 - Rare endometrial (Sig E)",
+                                                    "Sig 2 - APOBEC (Sig F)", 
+                                                    "Sig 1 - Age (Sig B)"))) %>%
+  mutate(testDonorPublicationID = factor(testDonorPublicationID, levels = unique(testDonorPublicationID))) 
+
+
+sig_perc_melt_pWES_dn_1 %>%
+  count(Study,testDonorPublicationID) %>%
+  count(Study)
+
+# Now remove joint MSI-like signature
+ggplot(sig_perc_melt_pWES_dn_1) +
+  geom_bar(aes(x = testDonorPublicationID,y = Perc, fill = Sig_Cosmic), stat = "identity") +
+  scale_fill_brewer(palette = "Set2") +
+  labs(x = "", y = "Contribution (%)", fill = "Sig. Cosmic - aetiology\n(Sig. ID de novo)") +
+  facet_grid(.~Study , scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position="bottom",
+        #strip.text.x = element_text(angle = 90),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 9))
+
+
+```
+
+## Mutation signature assignment
+  
+Running deconstructSignatures on TCGA to look for Signature 3. Since Signature 3 might be rare in this cancer type and is not as prominent as POLE or MSI, it is likely to be missed by de novo signature analysis.  
+  
+Only samples with >=50 mutations are shown, as signature estimation for samples with less mutations is not reliable.    
+  
+```{r run_dSigs_TCGA}
+
+# Joint SNV MAF was loaded (containing all samples) 
+
+# Convert to mutation matrix
+sig_input_pWES <- mut.to.sigs.input(mut.ref = maf_sp_SNV_pWES, 
+                                       sample.id = "testDonorPublicationID", 
+                                       chr = "chr", 
+                                       pos = "Start_Position", 
+                                       ref = "Reference_Allele", 
+                                       alt = "alt")
+
+
+
+sig_pWES_cosmic <- run_deconstructsigs(data = sig_input_pWES, 
+                                       out_path = "./",
+                                       out_name = "cosmicv2_sig",
+                                       signatures = cosmic_sigs,
+                                       method = "exome",
+                                       plot = F)
+
+```
+
+```{r parse_dSigs_out_cosmicv2}
+
+sig_pWES_cosmic_melt <- sig_pWES_cosmic %>%
+  mutate(Other = (1- rowSums(.[-1]))) %>% #Calculate up to 100%
+  gather(Sig, Count, -Sample) %>%
+  filter(Count != 0) %>%
+  mutate(Sig_name = case_when(Sig == "Sig1" ~ "Age",
+                              Sig == "Sig10" ~ "POLE mut",
+                              Sig == "Sig12" ~ "Unknown",
+                              Sig == "Sig13" ~ "APOBEC",
+                              Sig == "Sig14" ~ "POLE mut & MSI",
+                              Sig == "Sig15" ~ "MSI",
+                              Sig == "Sig16" ~ "Unknown",
+                              Sig == "Sig2" ~ "APOBEC",
+                              Sig == "Sig20" ~ "MSI",
+                              Sig == "Sig21" ~ "MSI",
+                              Sig == "Sig25" ~ "Unknown",
+                              Sig == "Sig26" ~ "MSI",
+                              Sig == "Sig3" ~ "HRD",
+                              Sig == "Sig30" ~ "NTHL1 mut",
+                              Sig == "Sig4" ~ "Smoking",
+                              Sig == "Sig5" ~ "Ubiquitous",
+                              Sig == "Sig6" ~ "MSI",
+                              Sig == "Other" ~ "")) %>%
+  mutate(Sig_full = if_else(Sig == "Other", Sig, paste0(Sig," (",Sig_name,")")))
+
+sig_pWES_cosmic_melt %<>%
+  mutate(Sig_full = factor(Sig_full, levels = rev(sig_list_cosmicv2)))
+
+sig_pWES_cosmic_melt %>%
+  select(1:3) %>%
+  arrange(Sample,-Count) %>%
+  mutate(Count = round(Count,3)) %>%
+  write_tsv(paste0("./tables/pWES_cosmicv2_sig_exome_melt.tsv"))
+
+```
+
+
+```{r plot_all_dSigs_pWES, fig.height=6,fig.width=10}
+sig_pWES_cosmic_melt_max <- sig_pWES_cosmic_melt %>%
+  select(Sample,Sig_name,Count,Sig) %>% 
+  distinct() %>%
+  group_by(Sample) %>%
+  filter(! Sig_name %in% c("Age","","Unknown")) %>%
+  group_by(Sample,Sig_name) %>%
+  summarise(Count_combined = sum(Count)) %>%
+  filter(Count_combined == max(Count_combined)) %>%
+  full_join(sig_pWES_cosmic_melt %>% select(Sample) %>% distinct(),
+            by = "Sample") %>%
+  mutate(Sig_name = factor(Sig_name, levels = c("MSI","POLE mut & MSI", 
+                                                "POLE mut","NTHL1 mut",
+                                                "APOBEC","HRD",
+                                                "Smoking","Ubiquitous"))) %>%
+  arrange(Sig_name,-Count_combined) %>%
+  ungroup() %>%
+  mutate(Sample = factor(Sample, levels = Sample))
+
+p_sig_pWES <- sig_pWES_cosmic_melt %>%
+  mutate(Sig_name = factor(Sig_name,levels = c("HRD","POLE mut","MSI",
+                                               "POLE mut & MSI","NTHL1 mut",
+                                               "APOBEC","Smoking",
+                                               "Age","Ubiquitous","Unknown"))) %>%
+  arrange(Sig_name,-Count) %>%
+  mutate(Sample = factor(Sample,levels=unique(Sample))) %>%
+  ggplot() +
+  geom_bar(aes(x=Sample,y=Count,fill=Sig_full),position = "stack",stat="identity", color=NA)+
+  labs(x = "",y="Proportion",fill="Signature") +
+  scale_fill_manual(values=sig_colours_cosmicv2) +
+  guides (fill = guide_legend(ncol=2)) +
+  theme_minimal(base_size = 11) + 
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "right")
+
+
+p_sig3_prop_pWES <- sig_pWES_cosmic_melt %>%
+  filter(Sig_full == "Sig3 (HRD)") %>%
+  right_join(sig_pWES_cosmic %>% select(Sample)) %>%
+  count(Sig_full) %>%
+  replace_na(list(Sig_full = "Other")) %>%
+  mutate(total = sum(n), proportion = n/total) %>%
+  mutate(Sig_full = factor(Sig_full, levels = c("Other","Sig3 (HRD)"))) %>%
+  ggplot(.) +
+  geom_bar(aes(fill = Sig_full, y=n, x=""), stat="identity", position = "stack") + 
+  scale_fill_manual(values = sig_colours_cosmicv2) + 
+  geom_text(aes(x="", y = n, label = paste0(round(proportion*100,1), "%\n(",n,")")),
+            position = position_stack(vjust=0.5), color="white")+
+  scale_y_continuous(limits=c(0,591), expand = c(0, 0)) + 
+  coord_flip() + 
+  labs(x="", y ="",fill = "Signature")  + 
+  theme_minimal(base_size = 11) + 
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "right")
+
+
+p_sig_pWES_all <- cowplot::plot_grid( p_sig3_prop_pWES,p_sig_pWES, align = "hv",
+                    axis = 'lrbt', nrow = 2, rel_heights = c(0.2, 0.8))
+
+p_sig_pWES_all
+
+
+```
+
+
+```{r combine_BROCA_som_germ_pWES}
+
+BROCA_pWES_combined <- BROCA_germ_maf_pWES %>%
+  bind_rows(BROCA_som_maf_pWES) %>%
+  select(Hugo_Symbol,Consequence,Mutation_Status,testDonorPublicationID)  %>%
+  full_join(sig_pWES_cosmic_melt_max %>% select(Sample),
+            by=c("testDonorPublicationID"="Sample")) %>%
+  tidyr::unite("Var", Consequence:Mutation_Status, remove = FALSE,sep = ":") %>%
+  mutate(Var = case_when(Var != "NA:NA" ~ Var)) %>%
+  spread(key=Hugo_Symbol,value=Var, fill = "WT") %>%
+  select(-`<NA>`, -Consequence,-Mutation_Status) %>%
+  gather(key=Hugo_Symbol,value=Var,-testDonorPublicationID) %>%
+  separate(Var, into = c("Consequence","Mutation_Status"), fill = "right", sep=":") %>%
+  mutate(Variant_Classification = case_when(str_detect(Consequence,"frameshift")~"FS",
+                                            str_detect(Consequence,"splice")~"SPLICE",
+                                            str_detect(Consequence,"stop")~"NS",
+                                            TRUE ~ "WT"))
+  
+BROCA_germ_maf_pWES %>%
+  bind_rows(BROCA_som_maf_pWES) %>%
+  write_tsv("tables/BROCA_pWES_som_and_germ_vars.tsv")
+  
+```
+
+```{r plot_HRD_dSigs_pWES_germ_var,fig.width=9,fig.height=6}
+p_sig3_vars <- BROCA_pWES_combined %>%
+  arrange(desc(Hugo_Symbol)) %>%
+  filter(Variant_Classification != "WT") %>%
+  select(-Consequence) %>%
+  mutate(case_submitter_id = factor(testDonorPublicationID, levels = unique(testDonorPublicationID))) %>%
+  ggplot() +
+  geom_tile(aes(x = case_submitter_id, y = Hugo_Symbol, fill = Variant_Classification)) +
+  geom_point(aes(x = case_submitter_id, y = Hugo_Symbol, size = Mutation_Status)) +
+  scale_size_manual(values=c("SOMATIC"=2, "GERM"=NA),guide="none") +
+  labs(x="",y="",fill="") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction = "horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))  
+
+sample_order <- levels(p_sig3_vars$data$case_submitter_id)
+
+p_sig3_var_prop <- sig_pWES_cosmic_melt %>%
+  arrange(Sig_full,Count) %>%
+  filter(Sample %in% sample_order) %>%
+  mutate(Sample = factor(Sample,levels= sample_order)) %>%
+  ggplot() +
+  geom_bar(aes(x=Sample,y=Count,fill=Sig_full),position = "stack",stat="identity")+
+  labs(x = "",y="Proportion") %>%
+  scale_fill_manual(values=sig_colours_cosmicv2) +
+  guides (fill = guide_legend(ncol=2)) +
+  theme_minimal(base_size = 11) + 
+  theme(axis.text.x=element_text(angle=90,hjust=1),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction="horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+  
+
+p_sig3_var_diag <- sig_perc_max_pWES_dn %>%
+  select(testDonorPublicationID, primary_diagnosis) %>%
+  filter(testDonorPublicationID %in% sample_order) %>%
+  mutate(submitter_id = factor(testDonorPublicationID,levels= sample_order)) %>%
+  mutate(diagnosis_abbr = case_when(str_detect(primary_diagnosis,"Clear cell") ~ "NEEC",
+                                    str_detect(primary_diagnosis,"undifferentiated") ~"NEEC",
+                                    str_detect(primary_diagnosis,"Carcinosarcoma") ~ "UCS",
+                                    str_detect(primary_diagnosis,"Endometrioid") ~ "EEC",
+                                    str_detect(primary_diagnosis,"Mullerian|Mesodermal") ~ "UCS",
+                                    str_detect(primary_diagnosis,"Papillary|Serous")~ "NEEC",
+                                    str_detect(primary_diagnosis,"Adenocarcinoma") ~ "NEEC")) %>%
+  mutate(diagnosis_abbr = factor(diagnosis_abbr, levels = c("EEC","NEEC","UCS"))) %>%
+  ggplot() +
+  geom_tile(aes(x = submitter_id, y = "histology", fill = diagnosis_abbr),colour="black") +
+  labs(x="",y="",fill="") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction="horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+p_sig3_var_study <-sig_perc_max_pWES_dn %>%
+  select(testDonorPublicationID, studyLabel) %>%
+  filter(testDonorPublicationID %in% sample_order) %>%
+  mutate(submitter_id = factor(testDonorPublicationID,levels= sample_order)) %>%
+  mutate(Study = str_remove(studyLabel,"TCGA_-_")) %>%
+  ggplot() +
+  geom_tile(aes(x = submitter_id, y = "study", fill = Study),colour="black") +
+  labs(x="",y="",fill="") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction = "horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+
+
+p_sig3_var_main <- cowplot::plot_grid(p_sig3_var_diag, p_sig3_var_study,
+                                      p_sig3_vars, p_sig3_var_prop, 
+                                      align = "v", axis = 'lr', nrow = 4,
+                                      rel_heights = c(0.1, 0.1, 0.3, 0.7))
+
+
+p_sig3_var_main
+
+
+
+
+```
+
+```{r plot_all_HRD_like_cases_prep}
+pWES_sig3_samples <-sig_pWES_cosmic_melt %>%
+  filter(Sig == "Sig3") %>%
+  pull(Sample) %>%
+  unique()
+
+pWES_BROCA_var_samples <- BROCA_pWES_combined %>%
+  filter(Variant_Classification != "WT") %>%
+  pull(testDonorPublicationID) %>%
+  unique()
+
+hrd_like_samples <- union(pWES_sig3_samples,
+                          pWES_BROCA_var_samples)
+
+```
+
+
+```{r plot_all_HRD_like_cases, fig.width=10, fig.height=8}
+
+p_sig3_hrd_prop <- sig_pWES_cosmic_melt %>%
+  arrange(desc(Sig_full),-Count) %>%
+  filter(Sample %in% hrd_like_samples) %>%
+  mutate(Sample = factor(Sample,levels=unique(Sample))) %>%
+  mutate(Group = case_when(Sample %in% pWES_sig3_samples ~ "Sig3",
+                           TRUE ~ "wNoSig3")) %>%
+  ggplot() +
+  geom_bar(aes(x=Sample,y=Count,fill=Sig_full),
+           position = "stack",stat="identity")+
+  labs(x = "",y="Proportion", fill="Signature") +
+  scale_fill_manual(values=sig_colours_cosmicv2) +
+  facet_grid(.~Group, scales="free_x",space="free_x") +
+  guides (fill = guide_legend(ncol=2)) +
+  theme_minimal(base_size = 11) + 
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction="horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+sample_order <- levels(p_sig3_hrd_prop$data$Sample)
+
+p_sig3_hrd_diag <- sig_perc_max_pWES_dn %>%
+  select(testDonorPublicationID, primary_diagnosis) %>%
+  filter(testDonorPublicationID %in% hrd_like_samples) %>%
+  mutate(submitter_id = factor(testDonorPublicationID, levels =sample_order)) %>%
+  mutate(diagnosis_abbr = case_when(str_detect(primary_diagnosis,"Clear cell") ~ "NEEC",
+                                    str_detect(primary_diagnosis,"undifferentiated") ~"NEEC",
+                                    str_detect(primary_diagnosis,"Carcinosarcoma") ~ "UCS",
+                                    str_detect(primary_diagnosis,"Endometrioid") ~ "EEC",
+                                    str_detect(primary_diagnosis,"Mullerian|Mesodermal") ~ "UCS",
+                                    str_detect(primary_diagnosis,"Papillary|Serous")~ "NEEC",
+                                    str_detect(primary_diagnosis,"Adenocarcinoma") ~ "NEEC")) %>%
+  mutate(diagnosis_abbr = factor(diagnosis_abbr, levels = c("EEC","NEEC","UCS"))) %>%
+  mutate(Group = case_when(submitter_id %in% pWES_sig3_samples ~ "Sig3",
+                           TRUE ~ "wNoSig3")) %>%
+  ggplot() +
+  geom_tile(aes(x = submitter_id, y = "Histology", fill = diagnosis_abbr),colour="grey") +
+  facet_grid(.~Group, scales="free_x",space="free_x") +
+  labs(x="",y="",fill="") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_text(angle=90,hjust=1, size=6),
+        strip.text.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction="horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+p_sig3_hrd_study <-sig_perc_max_pWES_dn %>%
+  select(testDonorPublicationID, studyLabel) %>%
+  filter(testDonorPublicationID %in% hrd_like_samples) %>%
+  mutate(submitter_id = factor(testDonorPublicationID, levels = sample_order)) %>%
+  mutate(Group = case_when(submitter_id %in% pWES_sig3_samples ~ "Sig3",
+                           TRUE ~ "wNoSig3")) %>%
+  mutate(Study = str_remove(studyLabel,"TCGA_-_")) %>%
+  ggplot() +
+  geom_tile(aes(x = submitter_id, y = "Study", fill = Study),colour="grey") +
+  labs(x="",y="",fill="") +
+  facet_grid(.~Group, scales="free_x",space="free_x") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction = "horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))
+
+
+p_sig3_hrd_vars <- BROCA_pWES_combined %>%
+  filter(testDonorPublicationID %in% hrd_like_samples) %>%
+  mutate(case_submitter_id = factor(testDonorPublicationID, 
+                                    levels = sample_order)) %>%
+  mutate(Hugo_Symbol = factor(Hugo_Symbol, levels = rev(c("BRCA1","PALB2","RAD51C","RAD51B",
+                                                          "BRIP1",'NBN',"MRE11A","CHEK2")))) %>%
+  mutate(Group = case_when(case_submitter_id %in% pWES_sig3_samples ~ "Sig3",
+                           TRUE ~ "wNoSig3")) %>%
+  ggplot() +
+  geom_tile(aes(x = case_submitter_id, y = Hugo_Symbol, fill = Variant_Classification), 
+            color="grey") +
+  geom_point(aes(x = case_submitter_id, y = Hugo_Symbol, size = Mutation_Status)) +
+  scale_size_manual(values=c("SOMATIC"=2, "GERM"=NA),guide="none") +
+  scale_fill_manual(values=c("FS"="#FFAB91","NS"="#90CAF9","SPLICE"="#80DEEA","WT"="#ECEFF1")) +
+  labs(x="",y="",fill="") +
+  facet_grid(.~Group, scales="free_x",space="free_x") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x=element_blank(),
+        strip.text.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        legend.direction = "horizontal",
+        legend.justification = c(0,0.5),
+        plot.margin = margin(l=0,unit="cm"))  
+
+
+p_sig3_hrd_study_main <- cowplot::plot_grid(p_sig3_hrd_prop, p_sig3_hrd_vars,
+                                   p_sig3_hrd_study,  p_sig3_hrd_diag, 
+                                   align = "v",axis = 'lr', nrow = 4, 
+                                   rel_heights = c(0.45,0.2, 0.05, 0.17))
+
+p_sig3_hrd_study_main
+
+```
+
+```{r sessionInfo}
+sessionInfo()
+```
+
+
+
